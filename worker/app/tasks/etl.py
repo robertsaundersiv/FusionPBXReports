@@ -58,8 +58,8 @@ async def _sync_recent_cdr_records(lookback_minutes: int = 5, batch_size: int = 
             start_date = newest_timestamp - timedelta(minutes=lookback_minutes)
             logger.info(f"Found newest CDR at {newest_timestamp.isoformat()}, syncing from {start_date.isoformat()}")
         else:
-            # If no records exist, sync from 30 days ago (default lookback)
-            start_date = end_date - timedelta(days=30)
+            # If no records exist, sync from 365 days ago (default lookback)
+            start_date = end_date - timedelta(days=365)
             logger.info(f"No existing CDR records found, syncing from {start_date.isoformat()}")
         
         logger.info(f"Syncing CDR records from {start_date.isoformat()} to {end_date.isoformat()}")

@@ -64,7 +64,7 @@ services:
       - ./backend:/app
     networks:
       - analytics-network
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    command: sh -c "python -m alembic upgrade head && python -m scripts.seed && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
 
   worker:
     build:
@@ -135,11 +135,15 @@ services:
   nginx:
     image: nginx:alpine
     container_name: fpbx-analytics-nginx
+    environment:
+      NGINX_SERVER_NAME: ${NGINX_SERVER_NAME:-_}
+      NGINX_ENVSUBST_OUTPUT_DIR: /etc/nginx
+      NGINX_ENVSUBST_FILTER: ^NGINX_SERVER_NAME$
     ports:
       - "80:80"
       - "443:443"
     volumes:
-      - ./docker/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./docker/nginx.conf:/etc/nginx/templates/nginx.conf.template:ro
       - ./docker/ssl:/etc/nginx/ssl:ro
     depends_on:
       - backend

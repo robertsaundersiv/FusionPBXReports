@@ -164,7 +164,7 @@ ScheduledReport Configuration:
 
 ### Development (Windows)
 ```bash
-docker-compose up
+docker compose up
 ```
 - All services in containers
 - Hot-reload enabled for code changes
@@ -173,7 +173,7 @@ docker-compose up
 
 ### Production (Ubuntu)
 ```bash
-docker-compose up -d
+docker compose up -d
 ```
 - Same compose file (compatibility)
 - SSL certificates configured
@@ -230,7 +230,7 @@ docker-compose up -d
 
 ### Log Aggregation Points
 - `/var/log/docker/` - Container logs
-- `docker-compose logs` - Real-time streaming
+- `docker compose logs` - Real-time streaming
 - Application structured logging with timestamps
 
 ### Health Checks

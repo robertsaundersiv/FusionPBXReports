@@ -62,7 +62,8 @@ FUSIONPBX_API_KEY=your_api_key_here
 ### 3. Run on Windows (Development)
 
 ```bash
-docker-compose up -d
+docker compose down --remove-orphans
+docker compose up -d --build
 ```
 
 Services will be available at:
@@ -81,11 +82,36 @@ export ENVIRONMENT=production
 # sudo certbot certonly --standalone -d your-domain.com
 
 # Start services
-docker-compose up -d
+docker compose down --remove-orphans
+docker compose up -d --build
 
 # View logs
-docker-compose logs -f
+docker compose logs -f
 ```
+
+### 5. Authentication and Seeded Users
+
+On backend startup, the container runs migrations and seeds users automatically:
+
+```bash
+python -m alembic upgrade head && python -m scripts.seed
+```
+
+Configure login users in `.env`:
+
+```env
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=replace_with_strong_password
+ADMIN_EMAIL=admin@example.com
+
+# Optional additional users
+# Format: username:password[:role[:email]];username2:password2[:role[:email]]
+EXTRA_SEED_USERS=user1:asfg087ti23S:user:user1@local;user2:4q5AG8L4V5YT8:user:user2@local
+```
+
+Notes:
+- `scripts.seed` is idempotent (existing users are not duplicated)
+- Default login is whatever `ADMIN_USERNAME` / `ADMIN_PASSWORD` are set to in `.env`
 
 ## Architecture
 
@@ -236,16 +262,16 @@ GET /api/v1/admin/metrics-audit
 
 ```bash
 # View all logs
-docker-compose logs -f
+docker compose logs -f
 
 # Backend logs only
-docker-compose logs -f backend
+docker compose logs -f backend
 
 # Worker logs only
-docker-compose logs -f worker
+docker compose logs -f worker
 
 # Database logs only
-docker-compose logs -f postgres
+docker compose logs -f db
 ```
 
 ## Maintenance
@@ -253,35 +279,35 @@ docker-compose logs -f postgres
 ### Database Backups
 ```bash
 # Backup
-docker-compose exec postgres pg_dump -U phonereports phonereports > backup.sql
+docker compose exec db pg_dump -U phonereports phonereports > backup.sql
 
 # Restore
-docker-compose exec -T postgres psql -U phonereports phonereports < backup.sql
+docker compose exec -T db psql -U phonereports phonereports < backup.sql
 ```
 
 ### Restart Services
 ```bash
-docker-compose restart backend
-docker-compose restart worker
-docker-compose restart postgres
+docker compose restart backend
+docker compose restart worker
+docker compose restart db
 ```
 
 ### View Database
 ```bash
-docker-compose exec postgres psql -U phonereports -d phonereports
+docker compose exec db psql -U phonereports -d phonereports
 ```
 
 ## Troubleshooting
 
 ### Cannot connect to FusionPBX
 - Verify `FUSIONPBX_HOST` and `FUSIONPBX_API_KEY` in `.env`
-- Check network connectivity: `docker-compose exec backend curl {FUSIONPBX_HOST}/health`
+- Check network connectivity: `docker compose exec backend curl {FUSIONPBX_HOST}/health`
 - Check API key permissions
 
 ### No data appearing
 - Verify CDR records exist in FusionPBX
-- Check worker logs: `docker-compose logs -f worker`
-- Manually trigger ETL: `docker-compose exec worker celery -A app.celery_app call app.tasks.ingest_cdr_records`
+- Check worker logs: `docker compose logs -f worker`
+- Manually trigger ETL: `docker compose exec worker celery -A app.celery_app call app.tasks.ingest_cdr_records`
 
 ### High memory usage
 - Reduce worker concurrency in docker-compose.yml
@@ -299,7 +325,7 @@ docker-compose exec postgres psql -U phonereports -d phonereports
 - [ ] Set up log rotation
 - [ ] Test backup/restore procedures
 - [ ] Document custom queue names and mappings
-- [ ] Create admin user account
+- [ ] Set `ADMIN_USERNAME`, `ADMIN_PASSWORD`, and optional `EXTRA_SEED_USERS` in `.env`
 
 ## API Documentation
 
@@ -325,16 +351,16 @@ Swagger UI automatically generated: `http://localhost:8000/docs`
 
 ```bash
 # Create migration
-docker-compose exec backend alembic revision --autogenerate -m "description"
+docker compose exec backend alembic revision --autogenerate -m "description"
 
 # Apply migrations
-docker-compose exec backend alembic upgrade head
+docker compose exec backend alembic upgrade head
 ```
 
 ## Support & Issues
 
 For issues, please check:
-1. Logs: `docker-compose logs -f`
+1. Logs: `docker compose logs -f`
 2. FusionPBX API connectivity
 3. Database connection status
 4. Redis connectivity for background tasks

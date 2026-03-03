@@ -55,6 +55,9 @@ docker/ssl/*.crt
 *.log
 logs/
 
+# Celery beat runtime state
+worker/celerybeat-schedule
+
 # Database
 *.db
 *.sqlite
