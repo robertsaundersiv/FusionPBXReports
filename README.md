@@ -91,10 +91,10 @@ docker compose logs -f
 
 ### 5. Authentication and Seeded Users
 
-On backend startup, the container runs migrations and seeds users automatically:
+On backend startup, the container runs migrations, seeds users, and performs initial metadata sync (queues, agents, extensions):
 
 ```bash
-python -m alembic upgrade head && python -m scripts.seed
+python -m alembic upgrade head && python -m scripts.seed && python -m scripts.sync_metadata_only && python -m scripts.sync_extensions
 ```
 
 Configure login users in `.env`:
@@ -111,6 +111,7 @@ EXTRA_SEED_USERS=user1:asfg087ti23S:user:user1@local;user2:4q5AG8L4V5YT8:user:us
 
 Notes:
 - `scripts.seed` is idempotent (existing users are not duplicated)
+- Metadata sync scripts are run in non-blocking mode at container startup (app still boots if FusionPBX is temporarily unreachable)
 - Default login is whatever `ADMIN_USERNAME` / `ADMIN_PASSWORD` are set to in `.env`
 
 ## Architecture
