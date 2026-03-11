@@ -341,7 +341,12 @@ def generate_scheduled_reports():
 # Beat schedule configuration
 from celery.schedules import crontab
 
-celery_app.conf.beat_schedule = {
+# Canonical beat schedule for periodic worker tasks.
+celery_app.conf.beat_schedule.update({
+    'sync-extensions-every-15-minutes': {
+        'task': 'app.tasks.sync_extensions',
+        'schedule': crontab(minute='*/15'),
+    },
     'ingest-cdr-every-15-minutes': {
         'task': 'app.tasks.ingest_cdr_records',
         'schedule': crontab(minute='*/15'),
@@ -371,4 +376,4 @@ celery_app.conf.beat_schedule = {
         'task': 'app.tasks.generate_scheduled_reports',
         'schedule': crontab(hour=3, minute=0),
     },
-}
+})
