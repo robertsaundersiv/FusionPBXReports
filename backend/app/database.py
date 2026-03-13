@@ -13,7 +13,7 @@ import time
 logger = logging.getLogger(__name__)
 
 # Build DATABASE_URL from environment variables
-db_user = os.getenv("DB_USER", "phonereports")
+db_user = os.getenv("DB_USER", "phonereports_user")
 db_password = os.getenv("DB_PASSWORD")
 db_host = os.getenv("DB_HOST", "localhost")
 db_name = os.getenv("DB_NAME", "phonereports")

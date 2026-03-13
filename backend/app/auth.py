@@ -46,6 +46,21 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     return encoded_jwt
 
 
+ROLE_SUPER_ADMIN = "super_admin"
+ROLE_ADMIN = "admin"
+ROLE_OPERATOR = "operator"
+
+
+def _validate_role(role: str) -> str:
+    allowed_roles = {ROLE_SUPER_ADMIN, ROLE_ADMIN, ROLE_OPERATOR}
+    if role not in allowed_roles:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid role '{role}'. Allowed roles: {', '.join(sorted(allowed_roles))}",
+        )
+    return role
+
+
 def verify_token(token: str) -> dict:
     """Verify and decode JWT token"""
     try:
@@ -72,10 +87,33 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
 
 
 async def get_current_admin(current_user: dict = Depends(get_current_user)) -> dict:
-    """Get current user and verify admin role"""
-    if current_user.get("role") != "admin":
+    """Get current user and verify admin or super_admin role"""
+    role = current_user.get("role")
+    if role not in {ROLE_ADMIN, ROLE_SUPER_ADMIN}:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin access required",
+        )
+    return current_user
+
+
+async def get_current_super_admin(current_user: dict = Depends(get_current_user)) -> dict:
+    """Get current user and verify super_admin role"""
+    role = current_user.get("role")
+    if role != ROLE_SUPER_ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Super admin access required",
+        )
+    return current_user
+
+
+async def get_current_operator(current_user: dict = Depends(get_current_user)) -> dict:
+    """Get current user and verify operator role"""
+    role = current_user.get("role")
+    if role != ROLE_OPERATOR:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Operator access required",
         )
     return current_user

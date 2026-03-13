@@ -271,7 +271,10 @@ export default function AgentPerformanceReportPage() {
         <DashboardFilterBar
           filters={filters}
           queues={queues}
-          agents={agents.filter((agent) => agent.agent_id !== undefined) as { agent_id: string | number; agent_name: string; }[]}
+          agents={agents.filter(
+            (agent): agent is { agent_uuid?: string; agent_id?: string | number; agent_name: string } =>
+              Boolean(agent.agent_uuid) || agent.agent_id !== undefined
+          )}
           onFiltersChange={handleFiltersChange}
           showAgents={true}
           showDirection={false}

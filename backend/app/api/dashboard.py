@@ -1,7 +1,7 @@
 """
 API routes for dashboard data
 """
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func, Integer, case, desc, or_, distinct, cast, String
 from app.database import get_db
@@ -1290,42 +1290,50 @@ async def get_outbound_calls(
     extensions = db.query(Extension).all()
     extension_uuid_map = {ext.extension_uuid: ext.user_name for ext in extensions if ext.extension_uuid and ext.user_name}
     
+    # Also build agent UUID to agent name map for cc_agent_uuid fallback
+    agent_map = {agent.agent_uuid: agent.agent_name for agent in db.query(Agent).all() if agent.agent_uuid and agent.agent_name}
+
     # Group by extension to collect per-user stats
     user_stats = {}  # user_name/extension_uuid -> {count, talk_time_sec}
     prefix_stats = {}  # first_3_letters -> {count, talk_time_sec}
-    
+
+    # Add guard logging for records fetched
+    record_count = base_query.count()
+    print(f"Outbound call records retrieved: {record_count}")
+
     for record in base_query.all():
-        # Resolve user name from extension_uuid, or fall back to extension_uuid itself
+        # Resolve user name from extension_cc info, then cc_agent_uuid, then cc_agent
         user_name = None
-        
+
         if record.extension_uuid:
-            # Try to get user_name from Extension table
-            user_name = extension_uuid_map.get(record.extension_uuid)
-            
-            # Fallback: if Extension table doesn't have this UUID, use extension_uuid
-            if not user_name:
-                user_name = record.extension_uuid
-        
+            user_name = extension_uuid_map.get(record.extension_uuid) or record.extension_uuid
+
+        if not user_name and record.cc_agent_uuid:
+            user_name = agent_map.get(record.cc_agent_uuid) or record.cc_agent_uuid
+
+        if not user_name and record.cc_agent:
+            user_name = record.cc_agent
+
         if not user_name:
-            # No extension_uuid at all - can't use this record
-            continue
-        
-        # Billsec is the billable seconds for the call
-        talk_time = record.billsec or 0
-        
+            # No identifying agent info; still count as "unknown agent"
+            user_name = "unknown"
+
+        # Determine talk time via billsec
+        talk_time = (record.billsec or 0)
+
         # Per-user stats
         if user_name not in user_stats:
             user_stats[user_name] = {"count": 0, "total_talk_time": 0}
         user_stats[user_name]["count"] += 1
         user_stats[user_name]["total_talk_time"] += talk_time
-        
+
         # Per-prefix stats (first 3 letters)
         prefix = user_name[:3] if len(user_name) >= 3 else user_name
         if prefix not in prefix_stats:
             prefix_stats[prefix] = {"count": 0, "total_talk_time": 0}
         prefix_stats[prefix]["count"] += 1
         prefix_stats[prefix]["total_talk_time"] += talk_time
-    
+
     # Format by_user results
     by_user = []
     for user_name, stats in user_stats.items():
@@ -1335,26 +1343,31 @@ async def get_outbound_calls(
             "count": stats["count"],
             "aht_seconds": aht,
         })
-    
+
     # Sort by count descending
     by_user.sort(key=lambda x: (-x["count"], x["agent_name"]))
-    
-    # Format by_prefix results
-    by_prefix = []
-    for prefix, stats in prefix_stats.items():
-        aht = stats["total_talk_time"] / stats["count"] if stats["count"] > 0 else 0
-        by_prefix.append({
-            "prefix": prefix,
-            "count": stats["count"],
-            "aht_seconds": aht,
-        })
-    
-    # Sort by count descending
-    by_prefix.sort(key=lambda x: -x["count"])
-    
-    return {
-        "start": start_date,
-        "end": end_date,
-        "by_user": by_user,
-        "by_prefix": by_prefix,
-    }
+
+    try:
+        # Format by_prefix results
+        by_prefix = []
+        for prefix, stats in prefix_stats.items():
+            aht = stats["total_talk_time"] / stats["count"] if stats["count"] > 0 else 0
+            by_prefix.append({
+                "prefix": prefix,
+                "count": stats["count"],
+                "aht_seconds": aht,
+            })
+
+        # Sort by count descending
+        by_prefix.sort(key=lambda x: -x["count"])
+
+        return {
+            "start": start_date,
+            "end": end_date,
+            "by_user": by_user,
+            "by_prefix": by_prefix,
+        }
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Outbound calls processing error: {e}")

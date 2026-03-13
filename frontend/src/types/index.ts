@@ -63,7 +63,8 @@ export interface Queue {
 
 export interface Agent {
   id?: number;
-  agent_id?: number;
+  agent_id?: string | number;
+  agent_uuid?: string;
   agent_name: string;
   agent_contact?: string;
   agent_enabled?: boolean;

@@ -339,21 +339,27 @@ export default function AgentPerformance() {
     if (!leaderboard || !agentId) {
       return null;
     }
-    return leaderboard.agents.find((agent) => agent.agent_id === agentId) || null;
+    return (
+      leaderboard.agents.find((agent) => String(agent.agent_id) === String(agentId)) ||
+      null
+    );
   }, [leaderboard, agentId]);
 
   const selectedAgentName = useMemo(() => {
     if (!agentId) {
       return null;
     }
-    const agentIdNum = parseInt(agentId, 10);
+
     // First try to get name from leaderboard (includes performance data)
-    const leaderboardAgent = leaderboard?.agents.find((agent) => parseInt(String(agent.agent_id), 10) === agentIdNum);
+    const leaderboardAgent = leaderboard?.agents.find((agent) => String(agent.agent_id) === String(agentId));
     if (leaderboardAgent) {
       return leaderboardAgent.agent_name;
     }
+
     // Fall back to agents list (metadata)
-    const agentMetadata = agents.find((agent) => parseInt(String(agent.agent_id), 10) === agentIdNum);
+    const agentMetadata = agents.find(
+      (agent) => String(agent.agent_uuid ?? agent.agent_id ?? agent.id) === String(agentId)
+    );
     return agentMetadata?.agent_name || agentId;
   }, [agentId, leaderboard, agents]);
 
@@ -478,7 +484,10 @@ export default function AgentPerformance() {
       <DashboardFilterBar
         filters={filters}
         queues={queues}
-        agents={agents.filter((a): a is Agent & { agent_id: string | number } => a.agent_id !== undefined)}
+        agents={agents.filter(
+          (a): a is Agent & { agent_uuid?: string; agent_id?: string | number } =>
+            Boolean(a.agent_uuid) || a.agent_id !== undefined
+        )}
         onFiltersChange={handleFiltersChange}
         showAgents={true}
         showDirection={false}

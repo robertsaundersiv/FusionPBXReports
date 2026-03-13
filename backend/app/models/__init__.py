@@ -312,8 +312,20 @@ class DailyAggregate(Base):
     )
 
 
+class Branch(Base):
+    """Branch locations for users"""
+    __tablename__ = "branches"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(256), unique=True, nullable=False)
+    description = Column(Text, nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class User(Base):
-    """Admin users for dashboard access"""
+    """Users (super_admin, admin, operator)"""
     __tablename__ = "users"
     
     id = Column(Integer, primary_key=True)
@@ -322,9 +334,12 @@ class User(Base):
     hashed_password = Column(String(256), nullable=False)
     
     # Role-based access
-    role = Column(String(50), default="user")  # admin, manager, user, viewer
+    role = Column(String(50), default="operator")  # super_admin, admin, operator
     
     enabled = Column(Boolean, default=True)
+
+    branch_id = Column(Integer, ForeignKey("branches.id"), nullable=True)
+    branch = relationship("Branch", backref="users")
     
     # Permissions
     can_view_unmasked_numbers = Column(Boolean, default=False)

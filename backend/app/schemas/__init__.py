@@ -55,6 +55,7 @@ class QueueResponse(BaseModel):
 # Agent Schema
 class AgentResponse(BaseModel):
     agent_id: Optional[int] = None
+    agent_uuid: Optional[str] = None
     agent_name: str
     agent_contact: Optional[str] = None
     agent_enabled: Optional[bool] = True
@@ -69,7 +70,8 @@ class AgentResponse(BaseModel):
 class UserBase(BaseModel):
     username: str
     email: EmailStr
-    role: str = "user"
+    role: str = "operator"  # super_admin, admin, operator
+    branch_id: Optional[int] = None
 
 
 class UserCreate(UserBase):
@@ -81,6 +83,17 @@ class UserResponse(UserBase):
     enabled: bool
     can_view_unmasked_numbers: bool
     created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class BranchResponse(BaseModel):
+    id: int
+    name: str
+    description: Optional[str]
+    created_at: datetime
+    updated_at: datetime
 
     class Config:
         from_attributes = True

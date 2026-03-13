@@ -173,7 +173,10 @@ export default function RepeatCallers() {
         <DashboardFilterBar
           filters={filters}
           queues={queues}
-          agents={agents.filter((a): a is Agent & { agent_id: string | number } => a.agent_id !== undefined)}
+          agents={agents.filter(
+            (a): a is Agent & { agent_uuid?: string; agent_id?: string | number } =>
+              Boolean(a.agent_uuid) || a.agent_id !== undefined
+          )}
           onFiltersChange={handleFiltersChange}
         />
         <div className="p-8 text-center">Loading Repeat Callers...</div>
@@ -187,7 +190,10 @@ export default function RepeatCallers() {
         <DashboardFilterBar
           filters={filters}
           queues={queues}
-          agents={agents.filter((a): a is Agent & { agent_id: string | number } => a.agent_id !== undefined)}
+          agents={agents.filter(
+            (a): a is Agent & { agent_uuid?: string; agent_id?: string | number } =>
+              Boolean(a.agent_uuid) || a.agent_id !== undefined
+          )}
           onFiltersChange={handleFiltersChange}
         />
         <div className="p-8 text-center text-red-600">{error}</div>
@@ -201,7 +207,10 @@ export default function RepeatCallers() {
         <DashboardFilterBar
           filters={filters}
           queues={queues}
-          agents={agents.filter((a): a is Agent & { agent_id: string | number } => a.agent_id !== undefined)}
+          agents={agents.filter(
+            (a): a is Agent & { agent_uuid?: string; agent_id?: string | number } =>
+              Boolean(a.agent_uuid) || a.agent_id !== undefined
+          )}
           onFiltersChange={handleFiltersChange}
         />
         <div className="p-8 text-center text-gray-600">No repeat callers found for this window.</div>
@@ -214,7 +223,10 @@ export default function RepeatCallers() {
       <DashboardFilterBar
         filters={filters}
         queues={queues}
-        agents={agents.filter((a): a is Agent & { agent_id: string | number } => a.agent_id !== undefined)}
+        agents={agents.filter(
+          (a): a is Agent & { agent_uuid?: string; agent_id?: string | number } =>
+            Boolean(a.agent_uuid) || a.agent_id !== undefined
+        )}
         onFiltersChange={handleFiltersChange}
       />
 

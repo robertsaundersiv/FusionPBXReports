@@ -2,20 +2,45 @@
 API routes for admin operations
 """
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from app.database import get_db
-from app.models import Queue, Agent, User, ScheduledReport, ETLPipelineStatus, OperationalNote
-from app.auth import get_current_admin, get_current_user
-from app.schemas import QueueResponse, AgentResponse, UserResponse, ScheduledReportResponse
+from app.models import Queue, Agent, User, Branch, ScheduledReport, ETLPipelineStatus, OperationalNote
+from app.auth import get_current_admin, get_current_super_admin, get_current_user
+from app.schemas import QueueResponse, AgentResponse, UserResponse, ScheduledReportResponse, BranchResponse
 from typing import List
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 
 
 # Queue Management
+@router.get("/branches", response_model=List[BranchResponse])
+async def get_branches(
+    current_user: dict = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    """Get all branches"""
+    branches = db.query(Branch).order_by(Branch.name).all()
+    return branches
+
+
+@router.post("/branches", response_model=BranchResponse)
+async def create_branch(
+    branch_data: dict,
+    current_user: dict = Depends(get_current_super_admin),
+    db: Session = Depends(get_db),
+):
+    """Create branch (super_admin only)"""
+    new_branch = Branch(**branch_data)
+    db.add(new_branch)
+    db.commit()
+    db.refresh(new_branch)
+    return new_branch
+
+
 @router.get("/queues", response_model=List[QueueResponse])
 async def get_queues(
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
     """Get all queues"""
@@ -26,7 +51,7 @@ async def get_queues(
 @router.get("/queues/{queue_id}", response_model=QueueResponse)
 async def get_queue(
     queue_id: int,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
     """Get specific queue"""
@@ -60,7 +85,7 @@ async def update_queue(
 # Agent Management
 @router.get("/agents", response_model=List[AgentResponse])
 async def get_agents(
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
     """Get all agents"""
@@ -70,12 +95,24 @@ async def get_agents(
 
 @router.get("/agents/{agent_id}", response_model=AgentResponse)
 async def get_agent(
-    agent_id: int,
-    current_user: dict = Depends(get_current_user),
+    agent_id: str,
+    current_user: dict = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
     """Get specific agent"""
-    agent = db.query(Agent).filter(Agent.agent_id == agent_id).first()
+    numeric_id = None
+    try:
+        numeric_id = int(agent_id)
+    except ValueError:
+        numeric_id = None
+
+    if numeric_id is not None:
+        agent = db.query(Agent).filter(
+            or_(Agent.agent_uuid == agent_id, Agent.id == numeric_id)
+        ).first()
+    else:
+        agent = db.query(Agent).filter(Agent.agent_uuid == agent_id).first()
+
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     return agent
@@ -99,15 +136,34 @@ async def update_user(
     current_user: dict = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    """Update user (admin only)"""
+    """Update user (admin/super_admin only)"""
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    
+
+    # Super admin can update everyone. Admin has restrictions.
+    current_role = current_user.get("role")
+    if current_role == "admin" and user.role == "super_admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin cannot update Super Admin",
+        )
+
+    # Prevent admin from promoting to super_admin
+    if current_role == "admin" and user_data.get("role") == "super_admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin cannot assign super_admin role",
+        )
+
     for key, value in user_data.items():
-        if key != 'hashed_password' and hasattr(user, key):
+        if key == "hashed_password":
+            continue
+        if key == "role" and current_role == "admin" and value == "super_admin":
+            continue
+        if hasattr(user, key):
             setattr(user, key, value)
-    
+
     db.commit()
     db.refresh(user)
     return user
@@ -119,20 +175,26 @@ async def delete_user(
     current_user: dict = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    """Delete user (admin only)"""
+    """Delete user (admin/super_admin only)"""
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    
+
+    current_role = current_user.get("role")
+    if current_role == "admin" and user.role == "super_admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin cannot delete Super Admin",
+        )
+
     db.delete(user)
     db.commit()
     return {"message": "User deleted"}
 
-
 # Scheduled Reports
 @router.get("/scheduled-reports", response_model=List[ScheduledReportResponse])
 async def get_scheduled_reports(
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
     """Get scheduled reports"""
@@ -186,7 +248,7 @@ async def get_etl_status(
 @router.post("/operational-notes")
 async def create_operational_note(
     note: dict,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
     """Create operational note"""
@@ -202,7 +264,7 @@ async def create_operational_note(
 
 @router.get("/operational-notes")
 async def get_operational_notes(
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
     """Get operational notes"""

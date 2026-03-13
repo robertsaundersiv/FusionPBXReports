@@ -5,9 +5,36 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(__file__))
 
+from sqlalchemy import inspect, text
+from sqlalchemy.exc import ProgrammingError
 from app.database import SessionLocal, engine
 from app.models import User
 from app.auth import hash_password
+
+
+def ensure_user_columns():
+    insp = inspect(engine)
+    if "users" not in insp.get_table_names():
+        return
+    cols = [col["name"] for col in insp.get_columns("users")]
+    if "branch_id" not in cols:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE users ADD COLUMN branch_id INTEGER"))
+
+    # create branches table if missing
+    if "branches" not in insp.get_table_names():
+        with engine.begin() as conn:
+            conn.execute(text(
+                """
+                CREATE TABLE IF NOT EXISTS branches (
+                    id SERIAL PRIMARY KEY,
+                    name VARCHAR(256) NOT NULL UNIQUE,
+                    description TEXT,
+                    created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT now(),
+                    updated_at TIMESTAMP WITHOUT TIME ZONE DEFAULT now()
+                )
+                """
+            ))
 
 
 def _bcrypt_safe_password(password: str) -> str:
@@ -71,23 +98,38 @@ def seed_database():
     
     try:
         created_users = []
-
-        # Create admin user if missing
+        # Ensure DB schema has branch_id and branches table before we query user role
+        try:
+            ensure_user_columns()
+        except ProgrammingError:
+            # If this fails, rollback and continue; the later seeds may still succeed
+            db.rollback()
+        # Create initial admin or super_admin user if missing
         admin_password = os.getenv("ADMIN_PASSWORD")
         if not admin_password:
             raise ValueError("ADMIN_PASSWORD environment variable must be set")
         admin_username = os.getenv("ADMIN_USERNAME", "admin")
         admin_email = os.getenv("ADMIN_EMAIL", "admin@example.com")
+        admin_role = os.getenv("ADMIN_ROLE", "super_admin")
+        if admin_role not in ["super_admin", "admin", "operator"]:
+            admin_role = "super_admin"
+
+        # Ensure at least one super_admin exists
+        existing_super = db.query(User).filter(User.role == "super_admin").first()
+        if not existing_super:
+            role_to_create = "super_admin"
+        else:
+            role_to_create = admin_role if admin_role in ["admin", "operator"] else "admin"
 
         if _upsert_user(
             db,
             username=admin_username,
             email=admin_email,
             password=admin_password,
-            role="admin",
+            role=role_to_create,
             can_view_unmasked_numbers=True,
         ):
-            created_users.append(admin_username)
+            created_users.append(f"{admin_username} ({role_to_create})")
 
         # Create any additional configured users
         extra_users = _parse_extra_seed_users(os.getenv("EXTRA_SEED_USERS", ""))

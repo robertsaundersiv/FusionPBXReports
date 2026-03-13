@@ -41,6 +41,9 @@ build/
 # Environment
 .env
 .env.local
+.env.development
+.env.production
+.env.test
 .env.*.local
 
 # Secrets and certificates
@@ -54,6 +57,7 @@ docker/ssl/*.crt
 # Logs
 *.log
 logs/
+backend_log.txt
 
 # Celery beat runtime state
 worker/celerybeat-schedule

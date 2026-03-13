@@ -6,14 +6,26 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import User
 from app.schemas import UserCreate, UserResponse
-from app.auth import hash_password, verify_password, create_access_token
+from app.auth import (
+    hash_password,
+    verify_password,
+    create_access_token,
+    get_current_user,
+    get_current_admin,
+    get_current_super_admin,
+    _validate_role,
+)
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
 
 @router.post("/register", response_model=UserResponse)
-async def register(user: UserCreate, db: Session = Depends(get_db)):
-    """Register new user"""
+async def register(
+    user: UserCreate,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_admin),
+):
+    """Register new user (admin/super_admin only)"""
     # Check if user exists
     existing_user = db.query(User).filter(User.username == user.username).first()
     if existing_user:
@@ -21,19 +33,56 @@ async def register(user: UserCreate, db: Session = Depends(get_db)):
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Username already registered",
         )
-    
-    # Create new user
+
+    # Role checks
+    requested_role = user.role or "operator"
+    _validate_role(requested_role)
+
+    if current_user.get("role") == "admin" and requested_role == "super_admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin cannot create Super Admin",
+        )
+
+    if requested_role not in ["super_admin", "admin", "operator"]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Role must be one of super_admin, admin, operator",
+        )
+
     new_user = User(
         username=user.username,
         email=user.email,
         hashed_password=hash_password(user.password),
-        role=user.role,
+        role=requested_role,
     )
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
-    
+
     return new_user
+
+
+@router.post("/change-password")
+async def change_password(
+    current_password: str,
+    new_password: str,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Change own password for any signed-in user (operator can only this action)"""
+    user = db.query(User).filter(User.id == current_user.get("user_id")).first()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    if not verify_password(current_password, user.hashed_password):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid current password")
+
+    user.hashed_password = hash_password(new_password)
+    db.commit()
+    db.refresh(user)
+
+    return {"message": "Password changed successfully"}
 
 
 @router.post("/login")

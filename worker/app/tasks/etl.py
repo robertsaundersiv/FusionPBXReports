@@ -243,39 +243,181 @@ def cleanup_old_cdr_records(retention_days: int = 31):
         return {"status": "error", "message": str(e)}
 
 
+async def _sync_queue_metadata() -> dict:
+    """Sync queue metadata from FusionPBX into the local database."""
+    client = get_fusion_client()
+    db = SessionLocal()
+    try:
+        logger.info("Fetching queues from FusionPBX")
+        await client.initialize()
+        queues = await client.get_queues()
+
+        total_processed = 0
+        total_created = 0
+        total_updated = 0
+        total_skipped = 0
+
+        if not queues:
+            logger.info("No queues returned from FusionPBX API")
+            return {
+                "status": "success",
+                "total": 0,
+                "created": 0,
+                "updated": 0,
+                "skipped": 0,
+            }
+
+        for queue_data in queues:
+            queue_uuid = queue_data.get("queue_uuid")
+            queue_name = queue_data.get("queue_name")
+            if not queue_uuid or not queue_name:
+                logger.warning(f"Skipping invalid queue record: {queue_data}")
+                total_skipped += 1
+                continue
+
+            existing = db.query(Queue).filter(Queue.queue_id == queue_uuid).first()
+
+            mapped_fields = {
+                "queue_id": queue_uuid,
+                "name": queue_name,
+                "queue_extension": queue_data.get("queue_extension"),
+                "description": queue_data.get("queue_description"),
+                "enabled": queue_data.get("queue_enabled", True),
+                "last_synced": datetime.utcnow(),
+                "extra_metadata": {
+                    "source": "fusionpbx",
+                },
+            }
+
+            if existing:
+                for key, value in mapped_fields.items():
+                    setattr(existing, key, value)
+                total_updated += 1
+            else:
+                queue = Queue(**mapped_fields)
+                db.add(queue)
+                total_created += 1
+
+            total_processed += 1
+
+        db.commit()
+
+        return {
+            "status": "success",
+            "total": total_processed,
+            "created": total_created,
+            "updated": total_updated,
+            "skipped": total_skipped,
+        }
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error syncing queue metadata: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
+    finally:
+        await client.close()
+        db.close()
+
+
 @celery_app.task(name="app.tasks.sync_queue_metadata")
 def sync_queue_metadata():
-    """
-    Periodic task: Sync queue metadata from FusionPBX
-    Runs hourly
-    """
+    """Periodic task to sync queue metadata from FusionPBX."""
     logger.info("Starting queue metadata sync")
     try:
-        # TODO: Implement queue sync logic
-        # 1. Fetch queues from FusionPBX API
-        # 2. Update Queue table
-        logger.info("Queue sync completed successfully")
-        return {"status": "success", "queues_synced": 0}
+        result = asyncio.run(_sync_queue_metadata())
+        logger.info(f"Queue sync completed: {result}")
+        return result
     except Exception as e:
-        logger.error(f"Error in queue sync: {e}")
+        logger.error(f"Error in queue sync: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}
+
+
+async def _sync_agent_metadata() -> dict:
+    """Sync agent metadata from FusionPBX into the local database."""
+    client = get_fusion_client()
+    db = SessionLocal()
+    try:
+        logger.info("Fetching agents from FusionPBX")
+        await client.initialize()
+        agents = await client.get_agents()
+
+        total_processed = 0
+        total_created = 0
+        total_updated = 0
+        total_skipped = 0
+
+        if not agents:
+            logger.info("No agents returned from FusionPBX API")
+            return {
+                "status": "success",
+                "total": 0,
+                "created": 0,
+                "updated": 0,
+                "skipped": 0,
+            }
+
+        for agent_data in agents:
+            agent_uuid = agent_data.get("agent_uuid")
+            agent_name = agent_data.get("agent_name")
+            if not agent_uuid or not agent_name:
+                logger.warning(f"Skipping invalid agent record: {agent_data}")
+                total_skipped += 1
+                continue
+
+            existing = db.query(Agent).filter(Agent.agent_uuid == agent_uuid).first()
+
+            mapped_fields = {
+                "agent_uuid": agent_uuid,
+                "agent_name": agent_name,
+                "agent_contact": agent_data.get("agent_contact"),
+                "extension": agent_data.get("agent_extension"),
+                "enabled": agent_data.get("agent_enabled", True),
+                "last_synced": datetime.utcnow(),
+                "extra_metadata": {
+                    "source": "fusionpbx",
+                },
+            }
+
+            if existing:
+                for key, value in mapped_fields.items():
+                    setattr(existing, key, value)
+                total_updated += 1
+            else:
+                agent = Agent(**mapped_fields)
+                db.add(agent)
+                total_created += 1
+
+            total_processed += 1
+
+        db.commit()
+
+        return {
+            "status": "success",
+            "total": total_processed,
+            "created": total_created,
+            "updated": total_updated,
+            "skipped": total_skipped,
+        }
+
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error syncing agent metadata: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
+
+    finally:
+        await client.close()
+        db.close()
 
 
 @celery_app.task(name="app.tasks.sync_agent_metadata")
 def sync_agent_metadata():
-    """
-    Periodic task: Sync agent metadata from FusionPBX
-    Runs hourly
-    """
+    """Periodic task to sync agent metadata from FusionPBX."""
     logger.info("Starting agent metadata sync")
     try:
-        # TODO: Implement agent sync logic
-        # 1. Fetch agents and tiers from FusionPBX API
-        # 2. Update Agent and AgentQueueTier tables
-        logger.info("Agent sync completed successfully")
-        return {"status": "success", "agents_synced": 0}
+        result = asyncio.run(_sync_agent_metadata())
+        logger.info(f"Agent sync completed: {result}")
+        return result
     except Exception as e:
-        logger.error(f"Error in agent sync: {e}")
+        logger.error(f"Error in agent sync: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}
 
 
@@ -356,13 +498,9 @@ celery_app.conf.beat_schedule.update({
         'schedule': crontab(minute='*/15'),
         'kwargs': {'retention_days': 1825},
     },
-    'sync-queue-metadata-hourly': {
-        'task': 'app.tasks.sync_queue_metadata',
-        'schedule': crontab(minute=0),
-    },
-    'sync-agent-metadata-hourly': {
-        'task': 'app.tasks.sync_agent_metadata',
-        'schedule': crontab(minute=30),
+    'sync-metadata-every-4-hours': {
+        'task': 'app.tasks.sync_metadata',
+        'schedule': crontab(minute=0, hour='*/4'),
     },
     'compute-hourly-aggregates': {
         'task': 'app.tasks.compute_hourly_aggregates',

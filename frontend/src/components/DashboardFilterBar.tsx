@@ -6,7 +6,12 @@ import { dateUtils } from '../utils/formatters';
 interface DashboardFilterBarProps {
   filters: DashboardFilters;
   queues: Array<{ id: number; queue_id: string; name: string }>;
-  agents: Array<{ agent_id: string | number; agent_name: string }>;
+  agents: Array<{
+    agent_uuid?: string;
+    agent_id?: string | number;
+    id?: number;
+    agent_name: string;
+  }>;
   onFiltersChange: (filters: DashboardFilters) => void;
   showQueues?: boolean;
   showAgents?: boolean;
@@ -198,11 +203,24 @@ export default function DashboardFilterBar({
               }}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
             >
-              {sortedAgents.map((agent, index) => (
-                <option key={agent.agent_id || `agent-${index}-${agent.agent_name}`} value={String(agent.agent_id)}>
-                  {agent.agent_name}
-                </option>
-              ))}
+              {sortedAgents
+                .map((agent, index) => {
+                  const agentValue =
+                    agent.agent_uuid ||
+                    (agent.agent_id !== undefined ? String(agent.agent_id) : undefined) ||
+                    (agent.id !== undefined ? String(agent.id) : undefined);
+
+                  if (!agentValue) {
+                    return null;
+                  }
+
+                  return (
+                    <option key={agentValue || `agent-${index}-${agent.agent_name}`} value={agentValue}>
+                      {agent.agent_name}
+                    </option>
+                  );
+                })
+                .filter(Boolean)}
             </select>
             <p className="text-xs text-gray-500">Hold Ctrl/Cmd to select multiple. None = All agents</p>
           </div>

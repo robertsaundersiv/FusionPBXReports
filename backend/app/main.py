@@ -14,6 +14,13 @@ from app.clients.fusionpbx import get_fusion_client, close_fusion_client
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Additional file logging for easy retrieval when docker logs interface is limited
+file_handler = logging.FileHandler('/app/backend.log')
+file_handler.setLevel(logging.INFO)
+file_formatter = logging.Formatter('%(asctime)s %(levelname)s %(name)s %(message)s')
+file_handler.setFormatter(file_formatter)
+logging.getLogger().addHandler(file_handler)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

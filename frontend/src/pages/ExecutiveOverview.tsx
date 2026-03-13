@@ -63,7 +63,10 @@ export default function ExecutiveOverview() {
       <DashboardFilterBar
         filters={filters}
         queues={queues}
-        agents={agents.filter((a): a is Agent & { agent_id: string | number } => a.agent_id !== undefined)}
+        agents={agents.filter(
+          (a): a is Agent & { agent_uuid?: string; agent_id?: string | number } =>
+            Boolean(a.agent_uuid) || a.agent_id !== undefined
+        )}
         onFiltersChange={(newFilters) => {
           updateDateRange(newFilters.dateRange);
           updateQueueIds(newFilters.queueIds);

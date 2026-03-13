@@ -4,7 +4,7 @@ services:
     container_name: fpbx-analytics-db
     environment:
       POSTGRES_DB: ${DB_NAME:-phonereports}
-      POSTGRES_USER: ${DB_USER:-phonereports_user}
+      POSTGRES_USER: ${DB_USER:-phonereports}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-phonereports_pass}
     volumes:
       - postgres_data:/var/lib/postgresql/data
