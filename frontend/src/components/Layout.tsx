@@ -39,7 +39,7 @@ export default function Layout({ children }: LayoutProps) {
   };
 
   const navigation = [
-    { name: 'Executive Overview', href: '/' },
+    { name: 'Executive Overview', href: '/executive-overview' },
     { name: 'Queue Performance', href: '/queue-performance' },
     { name: 'Queue Performance Report', href: '/queue-performance-report' },
     { name: 'Agent Performance', href: '/agent-performance' },

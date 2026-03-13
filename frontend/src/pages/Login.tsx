@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import apiClient from '../services/api';
 
 export default function Login() {
@@ -7,7 +6,6 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const navigate = useNavigate();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -21,8 +19,7 @@ export default function Login() {
 
       const { access_token } = response.data;
       localStorage.setItem('auth_token', access_token);
-      navigate('/');
-      window.location.reload(); // Reload to trigger authenticated state
+      window.location.href = '/executive-overview';
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Login failed. Please try again.');
     } finally {

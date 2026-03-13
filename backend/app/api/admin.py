@@ -5,9 +5,9 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from app.database import get_db
-from app.models import Queue, Agent, User, Branch, ScheduledReport, ETLPipelineStatus, OperationalNote
+from app.models import Queue, Agent, User, Branch, AgentGroupRule, ScheduledReport, ETLPipelineStatus, OperationalNote
 from app.auth import get_current_admin, get_current_super_admin, _validate_role
-from app.schemas import QueueResponse, AgentResponse, UserResponse, ScheduledReportResponse, BranchResponse, BranchCreate, UserUpdate
+from app.schemas import QueueResponse, AgentResponse, UserResponse, ScheduledReportResponse, BranchResponse, BranchCreate, UserUpdate, AgentGroupRuleCreate, AgentGroupRuleResponse
 from typing import List
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
@@ -40,6 +40,102 @@ async def create_branch(
     db.commit()
     db.refresh(new_branch)
     return new_branch
+
+
+@router.delete("/branches/{branch_id}")
+async def delete_branch(
+    branch_id: int,
+    current_user: dict = Depends(get_current_super_admin),
+    db: Session = Depends(get_db),
+):
+    """Delete branch/group (super_admin only)"""
+    branch = db.query(Branch).filter(Branch.id == branch_id).first()
+    if not branch:
+        raise HTTPException(status_code=404, detail="Branch not found")
+
+    # Reassign all users in this group to unassigned before delete.
+    db.query(User).filter(User.branch_id == branch_id).update(
+        {"branch_id": None}, synchronize_session=False
+    )
+
+    db.delete(branch)
+    db.commit()
+    return {"message": "Group deleted"}
+
+
+@router.get("/agent-group-rules", response_model=List[AgentGroupRuleResponse])
+async def get_agent_group_rules(
+    current_user: dict = Depends(get_current_super_admin),
+    db: Session = Depends(get_db),
+):
+    """Get all agent group mapping rules (super_admin only)"""
+    rules = db.query(AgentGroupRule).order_by(AgentGroupRule.priority.asc(), AgentGroupRule.id.asc()).all()
+    return [
+        {
+            "id": rule.id,
+            "match_value": rule.match_value,
+            "branch_id": rule.branch_id,
+            "branch_name": rule.branch.name if rule.branch else "Unknown",
+            "enabled": rule.enabled,
+            "priority": rule.priority,
+            "created_at": rule.created_at,
+            "updated_at": rule.updated_at,
+        }
+        for rule in rules
+    ]
+
+
+@router.post("/agent-group-rules", response_model=AgentGroupRuleResponse)
+async def create_agent_group_rule(
+    payload: AgentGroupRuleCreate,
+    current_user: dict = Depends(get_current_super_admin),
+    db: Session = Depends(get_db),
+):
+    """Create an agent group mapping rule (super_admin only)"""
+    match_value = payload.match_value.strip()
+    if not match_value:
+        raise HTTPException(status_code=400, detail="Match value is required")
+
+    branch = db.query(Branch).filter(Branch.id == payload.branch_id).first()
+    if not branch:
+        raise HTTPException(status_code=404, detail="Branch not found")
+
+    rule = AgentGroupRule(
+        match_value=match_value,
+        branch_id=payload.branch_id,
+        enabled=payload.enabled,
+        priority=payload.priority,
+    )
+    db.add(rule)
+    db.commit()
+    db.refresh(rule)
+
+    return {
+        "id": rule.id,
+        "match_value": rule.match_value,
+        "branch_id": rule.branch_id,
+        "branch_name": branch.name,
+        "enabled": rule.enabled,
+        "priority": rule.priority,
+        "created_at": rule.created_at,
+        "updated_at": rule.updated_at,
+    }
+
+
+@router.delete("/agent-group-rules/{rule_id}")
+async def delete_agent_group_rule(
+    rule_id: int,
+    current_user: dict = Depends(get_current_super_admin),
+    db: Session = Depends(get_db),
+):
+    """Delete an agent group mapping rule (super_admin only)"""
+    rule = db.query(AgentGroupRule).filter(AgentGroupRule.id == rule_id).first()
+    if not rule:
+        raise HTTPException(status_code=404, detail="Rule not found")
+
+    db.delete(rule)
+    db.commit()
+    return {"message": "Rule deleted"}
 
 
 @router.get("/queues", response_model=List[QueueResponse])
@@ -93,7 +189,12 @@ async def get_agents(
     db: Session = Depends(get_db),
 ):
     """Get all agents"""
-    agents = db.query(Agent).order_by(Agent.agent_name).all()
+    query = db.query(Agent)
+
+    if current_user.get("role") != "super_admin" and current_user.get("branch_id") is not None:
+        query = query.filter(Agent.branch_id == current_user.get("branch_id"))
+
+    agents = query.order_by(Agent.agent_name).all()
     return agents
 
 
@@ -176,6 +277,16 @@ async def update_user(
             detail="Admin can only set operator or admin roles",
         )
 
+    if user.role == "super_admin" and update_data.get("branch_id") is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Super admin group is fixed to All",
+        )
+
+    # Super admins always belong to the immutable "All" group (branch_id = None).
+    if user.role == "super_admin" or requested_role == "super_admin":
+        update_data["branch_id"] = None
+
     # Prevent removing the final enabled super admin via disable or role change.
     if user.role == "super_admin":
         will_disable = update_data.get("enabled") is False
@@ -218,7 +329,7 @@ async def delete_user(
         raise HTTPException(status_code=404, detail="User not found")
 
     current_role = current_user.get("role")
-    current_user_id = current_user.get("id")
+    current_user_id = current_user.get("user_id")
 
     if current_user_id == user.id:
         raise HTTPException(

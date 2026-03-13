@@ -58,6 +58,7 @@ class AgentResponse(BaseModel):
     agent_uuid: Optional[str] = None
     agent_name: str
     agent_contact: Optional[str] = None
+    branch_id: Optional[int] = None
     agent_enabled: Optional[bool] = True
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -114,6 +115,24 @@ class PasswordChangeRequest(BaseModel):
 class BranchCreate(BaseModel):
     name: str
     description: Optional[str] = None
+
+
+class AgentGroupRuleCreate(BaseModel):
+    match_value: str
+    branch_id: int
+    enabled: bool = True
+    priority: int = 100
+
+
+class AgentGroupRuleResponse(BaseModel):
+    id: int
+    match_value: str
+    branch_id: int
+    branch_name: str
+    enabled: bool
+    priority: int
+    created_at: datetime
+    updated_at: datetime
 
 
 # Dashboard KPI Schemas

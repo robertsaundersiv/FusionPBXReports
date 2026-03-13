@@ -20,6 +20,7 @@ __all__ = [
     "ETLPipelineStatus",
     "OperationalNote",
     "Extension",
+    "AgentGroupRule",
 ]
 
 
@@ -204,6 +205,8 @@ class Agent(Base):
     # User mapping
     user_uuid = Column(String(36))
     extension = Column(String(50))
+    branch_id = Column(Integer, ForeignKey("branches.id"), nullable=True)
+    branch = relationship("Branch", backref="agents")
     
     enabled = Column(Boolean, default=True)
     
@@ -322,6 +325,22 @@ class Branch(Base):
 
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class AgentGroupRule(Base):
+    """Rule-based mapping from agent name patterns to groups"""
+    __tablename__ = "agent_group_rules"
+
+    id = Column(Integer, primary_key=True)
+    match_value = Column(String(256), nullable=False)
+    branch_id = Column(Integer, ForeignKey("branches.id"), nullable=False)
+    enabled = Column(Boolean, default=True)
+    priority = Column(Integer, default=100)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    branch = relationship("Branch", backref="agent_group_rules")
 
 
 class User(Base):

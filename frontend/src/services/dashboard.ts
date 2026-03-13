@@ -107,12 +107,12 @@ export const dashboardService = {
   },
 
   async getQueues() {
-    const response = await apiClient.get('/api/v1/admin/queues');
+    const response = await apiClient.get('/api/v1/dashboard/queues-visible');
     return response.data;
   },
 
   async getAgents() {
-    const response = await apiClient.get('/api/v1/admin/agents');
+    const response = await apiClient.get('/api/v1/dashboard/agents-visible');
     return response.data;
   },
 

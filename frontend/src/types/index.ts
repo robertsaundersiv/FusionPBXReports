@@ -93,6 +93,17 @@ export interface Branch {
   updated_at: string;
 }
 
+export interface AgentGroupRule {
+  id: number;
+  match_value: string;
+  branch_id: number;
+  branch_name: string;
+  enabled: boolean;
+  priority: number;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface ExecutiveOverviewData {
   offered: KPIMetric;
   answerRate: KPIMetric;

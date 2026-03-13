@@ -36,6 +36,30 @@ def ensure_user_columns():
                 """
             ))
 
+    # add agent branch assignment column if missing
+    if "agents" in insp.get_table_names():
+        agent_cols = [col["name"] for col in insp.get_columns("agents")]
+        if "branch_id" not in agent_cols:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE agents ADD COLUMN branch_id INTEGER"))
+
+    # create agent group rules table if missing
+    if "agent_group_rules" not in insp.get_table_names():
+        with engine.begin() as conn:
+            conn.execute(text(
+                """
+                CREATE TABLE IF NOT EXISTS agent_group_rules (
+                    id SERIAL PRIMARY KEY,
+                    match_value VARCHAR(256) NOT NULL,
+                    branch_id INTEGER NOT NULL REFERENCES branches(id),
+                    enabled BOOLEAN DEFAULT TRUE,
+                    priority INTEGER DEFAULT 100,
+                    created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT now(),
+                    updated_at TIMESTAMP WITHOUT TIME ZONE DEFAULT now()
+                )
+                """
+            ))
+
 
 def _bcrypt_safe_password(password: str) -> str:
     if len(password.encode('utf-8')) > 72:

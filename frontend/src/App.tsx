@@ -41,7 +41,8 @@ function App() {
       <Layout>
         <Suspense fallback={<div className="p-8 text-center">Loading...</div>}>
           <Routes>
-            <Route path="/" element={<ExecutiveOverview />} />
+            <Route path="/" element={<Navigate to="/executive-overview" replace />} />
+            <Route path="/executive-overview" element={<ExecutiveOverview />} />
             <Route path="/queue-performance" element={<QueuePerformance />} />
             <Route path="/queue-performance-report" element={<QueuePerformanceReport />} />
             <Route path="/agent-performance" element={<AgentPerformance />} />
@@ -53,6 +54,7 @@ function App() {
             <Route path="/scheduled-reports" element={<ScheduledReports />} />
             <Route path="/admin/settings" element={<AdminSettings />} />
             <Route path="/admin/metrics-audit" element={<MetricsAudit />} />
+            <Route path="*" element={<Navigate to="/executive-overview" replace />} />
           </Routes>
         </Suspense>
       </Layout>

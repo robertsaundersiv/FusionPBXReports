@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(os.path.dirname(__file__)), '.env'))
 
 from app.database import SessionLocal, engine, get_db_context, Base
-from app.models import Queue, Agent, CDRRecord
+from app.models import Queue, Agent, AgentGroupRule, CDRRecord
 from app.clients.fusionpbx import FusionPBXClient
 from app.utils.logger import logger
 
@@ -107,6 +107,20 @@ async def sync_agents():
         total_updated = 0
         
         with get_db_context() as db:
+            rules = (
+                db.query(AgentGroupRule)
+                .filter(AgentGroupRule.enabled == True)
+                .order_by(AgentGroupRule.priority.asc(), AgentGroupRule.id.asc())
+                .all()
+            )
+
+            def resolve_branch_id(agent_name: str):
+                name = (agent_name or "").lower()
+                for rule in rules:
+                    if rule.match_value and rule.match_value.lower() in name:
+                        return rule.branch_id
+                return None
+
             for agent_data in agents:
                 agent_uuid = agent_data.get('agent_uuid')
                 agent_name = agent_data.get('agent_name')
@@ -125,6 +139,7 @@ async def sync_agents():
                     'agent_name': agent_name,
                     'agent_contact': agent_data.get('agent_contact'),
                     'extension': agent_data.get('agent_extension'),
+                    'branch_id': resolve_branch_id(agent_name),
                     'enabled': agent_data.get('agent_enabled', True),
                     'last_synced': datetime.utcnow()
                 }

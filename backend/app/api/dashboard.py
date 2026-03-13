@@ -5,14 +5,66 @@ from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func, Integer, case, desc, or_, distinct, cast, String
 from app.database import get_db
-from app.models import CDRRecord, Queue, Agent, DailyAggregate, HourlyAggregate, User, Extension
+from app.models import CDRRecord, Queue, Agent, AgentGroupRule, DailyAggregate, HourlyAggregate, User, Extension
 from app.auth import get_current_user
 from app.schemas import ExecutiveOverviewResponse, QueuePerformanceResponse, AgentPerformanceResponse, RepeatCallersResponse
 from app.kpi_definitions import KPIDefinitions
 from datetime import datetime, timedelta
-from typing import List, Optional
+from typing import List, Optional, Set
 
 router = APIRouter(prefix="/api/v1/dashboard", tags=["dashboard"])
+
+
+def get_accessible_agent_identifiers(db: Session, current_user: dict) -> Optional[Set[str]]:
+    """Return allowed agent identifiers for the current user.
+
+    - super_admin: unrestricted (None)
+    - users with branch_id: only agents in that branch
+    - users without branch_id: unrestricted (legacy compatibility)
+    """
+    if current_user.get("role") == "super_admin":
+        return None
+
+    branch_id = current_user.get("branch_id")
+    if branch_id is None:
+        return None
+
+    agents = db.query(Agent).filter(Agent.branch_id == branch_id).all()
+    identifiers: Set[str] = set()
+    for agent in agents:
+        if agent.agent_uuid:
+            identifiers.add(agent.agent_uuid)
+        if agent.agent_name:
+            identifiers.add(agent.agent_name)
+        if agent.extension:
+            identifiers.add(agent.extension)
+        if agent.agent_contact:
+            identifiers.add(agent.agent_contact)
+
+    return identifiers
+
+
+@router.get("/queues-visible")
+async def get_visible_queues(
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Get queue metadata visible to current user"""
+    queues = db.query(Queue).order_by(Queue.name).all()
+    return queues
+
+
+@router.get("/agents-visible")
+async def get_visible_agents(
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Get agent metadata visible to current user (group-scoped for non-super-admin)"""
+    query = db.query(Agent)
+    if current_user.get("role") != "super_admin" and current_user.get("branch_id") is not None:
+        query = query.filter(Agent.branch_id == current_user.get("branch_id"))
+    agents = query.order_by(Agent.agent_name).all()
+    return agents
 
 
 @router.get("/executive-overview")
@@ -1266,6 +1318,27 @@ async def get_outbound_calls(
     
     start_epoch = int(start_date.timestamp())
     end_epoch = int((end_date.replace(hour=23, minute=59, second=59)).timestamp())
+    allowed_agent_names = None
+    allowed_agent_identifiers = None
+    branch_rule_keywords = []
+    if current_user.get("role") != "super_admin" and current_user.get("branch_id") is not None:
+        branch_agents = db.query(Agent).filter(Agent.branch_id == current_user.get("branch_id")).all()
+        allowed_agent_names = {a.agent_name.lower() for a in branch_agents if a.agent_name}
+        allowed_agent_identifiers = set()
+        for agent in branch_agents:
+            if agent.agent_uuid:
+                allowed_agent_identifiers.add(agent.agent_uuid)
+            if agent.extension:
+                allowed_agent_identifiers.add(agent.extension)
+            if agent.agent_contact:
+                allowed_agent_identifiers.add(agent.agent_contact)
+
+        rule_rows = (
+            db.query(AgentGroupRule)
+            .filter(AgentGroupRule.branch_id == current_user.get("branch_id"), AgentGroupRule.enabled == True)
+            .all()
+        )
+        branch_rule_keywords = [r.match_value.lower() for r in rule_rows if r.match_value]
     
     # Filter outbound calls only
     base_query = db.query(CDRRecord).filter(
@@ -1273,6 +1346,14 @@ async def get_outbound_calls(
         CDRRecord.start_epoch <= end_epoch,
         CDRRecord.direction == "outbound",
     )
+
+    if allowed_agent_names is not None and not allowed_agent_names:
+        return {
+            "start": start_date,
+            "end": end_date,
+            "by_user": [],
+            "by_prefix": [],
+        }
     
     # Convert queue UUIDs to cc_queue identifiers if provided
     if queue_ids:
@@ -1290,8 +1371,21 @@ async def get_outbound_calls(
     extensions = db.query(Extension).all()
     extension_uuid_map = {ext.extension_uuid: ext.user_name for ext in extensions if ext.extension_uuid and ext.user_name}
     
-    # Also build agent UUID to agent name map for cc_agent_uuid fallback
-    agent_map = {agent.agent_uuid: agent.agent_name for agent in db.query(Agent).all() if agent.agent_uuid and agent.agent_name}
+    # Build agent identifier map for resolving canonical agent names
+    agent_query = db.query(Agent)
+    if current_user.get("role") != "super_admin" and current_user.get("branch_id") is not None:
+        agent_query = agent_query.filter(Agent.branch_id == current_user.get("branch_id"))
+    agent_map = {}
+    for agent in agent_query.all():
+        if not agent.agent_name:
+            continue
+        if agent.agent_uuid:
+            agent_map[agent.agent_uuid] = agent.agent_name
+        if agent.extension:
+            agent_map[agent.extension] = agent.agent_name
+        if agent.agent_contact:
+            agent_map[agent.agent_contact] = agent.agent_name
+        agent_map[agent.agent_name] = agent.agent_name
 
     # Group by extension to collect per-user stats
     user_stats = {}  # user_name/extension_uuid -> {count, talk_time_sec}
@@ -1302,14 +1396,20 @@ async def get_outbound_calls(
     print(f"Outbound call records retrieved: {record_count}")
 
     for record in base_query.all():
-        # Resolve user name from extension_cc info, then cc_agent_uuid, then cc_agent
+        # Resolve canonical agent name, preferring call-center agent identifiers.
         user_name = None
 
+        if record.cc_agent_uuid:
+            user_name = agent_map.get(record.cc_agent_uuid)
+
+        if not user_name and record.cc_agent:
+            user_name = agent_map.get(record.cc_agent)
+
         if record.extension_uuid:
-            user_name = extension_uuid_map.get(record.extension_uuid) or record.extension_uuid
+            user_name = user_name or extension_uuid_map.get(record.extension_uuid)
 
         if not user_name and record.cc_agent_uuid:
-            user_name = agent_map.get(record.cc_agent_uuid) or record.cc_agent_uuid
+            user_name = record.cc_agent_uuid
 
         if not user_name and record.cc_agent:
             user_name = record.cc_agent
@@ -1317,6 +1417,22 @@ async def get_outbound_calls(
         if not user_name:
             # No identifying agent info; still count as "unknown agent"
             user_name = "unknown"
+
+        if allowed_agent_names is not None:
+            matches_name = user_name.lower() in allowed_agent_names
+            matches_identifier = False
+            matches_rule_keyword = False
+            if allowed_agent_identifiers is not None:
+                matches_identifier = (
+                    (record.cc_agent_uuid in allowed_agent_identifiers)
+                    or (record.cc_agent in allowed_agent_identifiers)
+                )
+            if branch_rule_keywords:
+                lowered = user_name.lower()
+                matches_rule_keyword = any(keyword in lowered for keyword in branch_rule_keywords)
+
+            if not matches_name and not matches_identifier and not matches_rule_keyword:
+                continue
 
         # Determine talk time via billsec
         talk_time = (record.billsec or 0)

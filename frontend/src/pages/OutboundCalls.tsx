@@ -34,7 +34,7 @@ const formatCsvValue = (value: string | number | null | undefined): string => {
 };
 
 export default function OutboundCalls() {
-  const { filters, updateDateRange, updateQueueIds } = useFilterStore();
+  const { filters, updateDateRange, updateQueueIds, updateAgentUuids } = useFilterStore();
   const [data, setData] = useState<OutboundCallsResponse | null>(null);
   const [queues, setQueues] = useState<any[]>([]);
   const [agents, setAgents] = useState<any[]>([]);
@@ -62,6 +62,11 @@ export default function OutboundCalls() {
 
     loadMetadata();
   }, []);
+
+  useEffect(() => {
+    // Avoid carrying agent selection from other pages; outbound report is queue/date scoped.
+    updateAgentUuids([]);
+  }, [updateAgentUuids]);
 
   useEffect(() => {
     loadData();

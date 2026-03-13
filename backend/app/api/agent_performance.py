@@ -4,7 +4,7 @@ Agent performance API routes.
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 from collections import defaultdict
 
 from fastapi import APIRouter, Depends, Query, HTTPException
@@ -71,6 +71,36 @@ def build_agent_name_map(db: Session, enabled_only: bool = True) -> Dict[str, st
     return {agent.agent_uuid: agent.agent_name for agent in agents}
 
 
+def get_accessible_agent_identifiers(db: Session, current_user: dict) -> Optional[Set[str]]:
+    """Return allowed agent identifiers for the current user.
+
+    - super_admin: unrestricted (None)
+    - other roles with branch_id: only agents assigned to that branch
+    - other roles without branch_id: unrestricted for backward compatibility
+    """
+    if current_user.get("role") == "super_admin":
+        return None
+
+    branch_id = current_user.get("branch_id")
+    if branch_id is None:
+        return None
+
+    agents = db.query(Agent).filter(Agent.branch_id == branch_id).all()
+    identifiers: Set[str] = set()
+
+    for agent in agents:
+        if agent.agent_uuid:
+            identifiers.add(agent.agent_uuid)
+        if agent.agent_name:
+            identifiers.add(agent.agent_name)
+        if agent.extension:
+            identifiers.add(agent.extension)
+        if agent.agent_contact:
+            identifiers.add(agent.agent_contact)
+
+    return identifiers
+
+
 def apply_common_filters(
     query,
     start_epoch: int,
@@ -78,6 +108,7 @@ def apply_common_filters(
     queue_extensions: List[str],
     agent_ids: List[str],
     include_outbound: bool,
+    accessible_agent_ids: Optional[Set[str]] = None,
 ):
     query = query.filter(
         CDRRecord.start_epoch >= start_epoch,
@@ -98,6 +129,17 @@ def apply_common_filters(
                 CDRRecord.cc_agent.in_(agent_ids),
             )
         )
+
+    if accessible_agent_ids is not None:
+        if not accessible_agent_ids:
+            query = query.filter(CDRRecord.id == -1)
+        else:
+            query = query.filter(
+                or_(
+                    CDRRecord.cc_agent_uuid.in_(list(accessible_agent_ids)),
+                    CDRRecord.cc_agent.in_(list(accessible_agent_ids)),
+                )
+            )
 
     query = query.filter(
         or_(
@@ -142,6 +184,7 @@ async def get_agent_leaderboard(
     start_epoch, end_epoch = get_time_window(start, end)
     queue_ids = parse_csv_list(queues)
     agent_ids = parse_csv_list(agents)
+    accessible_agent_ids = get_accessible_agent_identifiers(db, current_user)
 
     queue_name_map = build_queue_extension_map(db, queue_ids)
     queue_extensions = list(queue_name_map.keys())
@@ -162,6 +205,7 @@ async def get_agent_leaderboard(
         queue_extensions,
         agent_ids,
         include_outbound,
+        accessible_agent_ids,
     )
 
     records = query.all()
@@ -249,6 +293,7 @@ async def get_agent_trends(
     queue_ids = parse_csv_list(queues)
     queue_name_map = build_queue_extension_map(db, queue_ids)
     queue_extensions = list(queue_name_map.keys())
+    accessible_agent_ids = get_accessible_agent_identifiers(db, current_user)
 
     if queue_ids and not queue_extensions:
         return {"agent_id": agent_id, "buckets": []}
@@ -260,6 +305,7 @@ async def get_agent_trends(
         queue_extensions,
         [agent_id],
         include_outbound,
+        accessible_agent_ids,
     )
 
     records = query.all()
@@ -329,6 +375,10 @@ async def get_agent_performance_report(
     start_epoch, end_epoch = get_time_window(start, end)
     queue_ids = parse_csv_list(queues)
     agent_ids = parse_csv_list(agents)
+    accessible_agent_ids = get_accessible_agent_identifiers(db, current_user)
+    visible_agents = []
+    if current_user.get("role") != "super_admin" and current_user.get("branch_id") is not None:
+        visible_agents = db.query(Agent).filter(Agent.branch_id == current_user.get("branch_id")).all()
 
     queue_lookup = build_queue_lookup(db, queue_ids)
     queue_extensions = list(queue_lookup.keys())
@@ -349,6 +399,7 @@ async def get_agent_performance_report(
         queue_extensions,
         agent_ids,
         include_outbound,
+        accessible_agent_ids,
     ).filter(CDRRecord.cc_queue.isnot(None))
 
     records = query.all()
@@ -407,6 +458,13 @@ async def get_agent_performance_report(
 
     agents_payload = []
     agent_id_set = set(handled_calls.keys()) | set(missed_calls.keys())
+
+    # For group-scoped users, include visible agents even when they have zero activity
+    # in the selected time window (unless an explicit agent filter was requested).
+    if not agent_ids and visible_agents:
+        for agent in visible_agents:
+            if agent.agent_uuid:
+                agent_id_set.add(agent.agent_uuid)
 
     for agent_id in agent_id_set:
         handled_records = list(handled_calls.get(agent_id, {}).values())
@@ -473,6 +531,7 @@ async def get_agent_outliers(
     queue_ids = parse_csv_list(queues)
     queue_name_map = build_queue_extension_map(db, queue_ids)
     queue_extensions = list(queue_name_map.keys())
+    accessible_agent_ids = get_accessible_agent_identifiers(db, current_user)
 
     if queue_ids and not queue_extensions:
         return {"agent_id": agent_id, "type": type, "outliers": []}
@@ -484,6 +543,7 @@ async def get_agent_outliers(
         queue_extensions,
         [agent_id],
         include_outbound,
+        accessible_agent_ids,
     )
 
     records = query.all()
@@ -550,6 +610,7 @@ async def get_agent_calls(
     queue_ids = parse_csv_list(queues)
     queue_name_map = build_queue_extension_map(db, queue_ids)
     queue_extensions = list(queue_name_map.keys())
+    accessible_agent_ids = get_accessible_agent_identifiers(db, current_user)
 
     if queue_ids and not queue_extensions:
         return {"total": 0, "limit": limit, "offset": offset, "calls": []}
@@ -563,6 +624,7 @@ async def get_agent_calls(
         queue_extensions,
         agent_ids,
         include_outbound,
+        accessible_agent_ids,
     )
 
     if search:
@@ -627,6 +689,12 @@ async def get_agent_call_detail(
     record = db.query(CDRRecord).filter(CDRRecord.xml_cdr_uuid == call_uuid).first()
     if not record:
         raise HTTPException(status_code=404, detail="Call not found")
+
+    accessible_agent_ids = get_accessible_agent_identifiers(db, current_user)
+    if accessible_agent_ids is not None:
+        record_agent = normalize_agent_id(record)
+        if not record_agent or record_agent not in accessible_agent_ids:
+            raise HTTPException(status_code=404, detail="Call not found")
 
     return {
         "call_id": record.xml_cdr_uuid,

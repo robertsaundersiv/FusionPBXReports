@@ -78,6 +78,12 @@ export default function AgentPerformanceReportPage() {
   }, []);
 
   useEffect(() => {
+    // Avoid carrying agent selection from other pages (e.g., agent detail route)
+    // so this report defaults to all visible agents.
+    updateAgentUuids([]);
+  }, [updateAgentUuids]);
+
+  useEffect(() => {
     loadData();
   }, [filters]);
 

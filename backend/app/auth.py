@@ -114,6 +114,7 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
             "sub": user.username,
             "user_id": user.id,
             "role": user.role,
+            "branch_id": user.branch_id,
         }
     finally:
         db.close()
