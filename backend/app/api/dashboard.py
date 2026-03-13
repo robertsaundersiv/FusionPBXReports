@@ -9,10 +9,36 @@ from app.models import CDRRecord, Queue, Agent, AgentGroupRule, DailyAggregate, 
 from app.auth import get_current_user
 from app.schemas import ExecutiveOverviewResponse, QueuePerformanceResponse, AgentPerformanceResponse, RepeatCallersResponse
 from app.kpi_definitions import KPIDefinitions
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone as dt_timezone
 from typing import List, Optional, Set
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 router = APIRouter(prefix="/api/v1/dashboard", tags=["dashboard"])
+
+
+WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+
+
+def to_sunday_first_weekday_index(python_weekday: int) -> int:
+    """Convert Python weekday numbering (Mon=0..Sun=6) to Sunday-first (Sun=0..Sat=6)."""
+    return (python_weekday + 1) % 7
+
+
+def get_requested_timezone(timezone_name: Optional[str]) -> ZoneInfo:
+    try:
+        return ZoneInfo(timezone_name or "America/Phoenix")
+    except ZoneInfoNotFoundError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid timezone: {timezone_name}") from exc
+
+
+def ensure_utc_datetime(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=dt_timezone.utc)
+    return value.astimezone(dt_timezone.utc)
+
+
+def local_timestamp_expr(epoch_column, timezone_name: str):
+    return func.timezone(timezone_name, func.to_timestamp(epoch_column))
 
 
 def get_accessible_agent_identifiers(db: Session, current_user: dict) -> Optional[Set[str]]:
@@ -73,6 +99,7 @@ async def get_executive_overview(
     end_date: Optional[datetime] = Query(None),
     queue_ids: Optional[List[str]] = Query(None),
     direction: Optional[str] = Query(None),
+    timezone: str = Query("America/Phoenix"),
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -91,16 +118,21 @@ async def get_executive_overview(
     print(f"End date: {end_date}")
     print(f"Queue IDs: {queue_ids}")
     print(f"Direction: {direction}")
+    print(f"Timezone: {timezone}")
+
+    user_timezone = get_requested_timezone(timezone)
     
     # Default to last 7 days if not specified
     if not end_date:
-        end_date = datetime.utcnow()
+        end_date = datetime.now(user_timezone)
     if not start_date:
         start_date = end_date - timedelta(days=7)
+
+    start_date = ensure_utc_datetime(start_date)
+    end_date = ensure_utc_datetime(end_date)
     
     start_epoch = int(start_date.timestamp())
-    # Set end_epoch to end of day (23:59:59) to include full last day
-    end_epoch = int((end_date.replace(hour=23, minute=59, second=59)).timestamp())
+    end_epoch = int(end_date.timestamp())
     
     print(f"Start epoch: {start_epoch}, End epoch: {end_epoch}")
     
@@ -247,8 +279,9 @@ async def get_executive_overview(
         service_level = (within_threshold / len(service_level_records) * 100)
     
     # Get trend data (daily) - count unique queue entries by (caller, join_epoch)
+    local_start_timestamp = local_timestamp_expr(CDRRecord.start_epoch, timezone)
     trend_query = db.query(
-        func.date(func.to_timestamp(CDRRecord.start_epoch)).label('date'),
+        func.date(local_start_timestamp).label('date'),
         # Count distinct (caller + join_epoch) combinations
         func.count(func.distinct(
             func.concat(CDRRecord.caller_id_number, '|', cast(CDRRecord.cc_queue_joined_epoch, String))
@@ -278,10 +311,61 @@ async def get_executive_overview(
     
     offered_trend = [{'date': str(d[0]), 'value': d[1]} for d in daily_aggregates]
     answered_trend = [{'date': str(d[0]), 'value': d[2] or 0} for d in daily_aggregates]
+
+    # Bucket call volume by weekday and hour using the same unique queue-entry methodology
+    weekday_totals = {index: 0 for index in range(7)}
+    hour_totals = {index: 0 for index in range(24)}
+
+    for records in unique_queue_entries.values():
+        record = records[0]
+        queue_epoch = record.cc_queue_joined_epoch or record.start_epoch
+        if queue_epoch is None:
+            continue
+
+        bucket_dt = datetime.fromtimestamp(queue_epoch, user_timezone)
+        weekday_index = to_sunday_first_weekday_index(bucket_dt.weekday())
+        weekday_totals[weekday_index] += 1
+        hour_totals[bucket_dt.hour] += 1
+
+    date_cursor = start_date.astimezone(user_timezone).date()
+    end_date_only = end_date.astimezone(user_timezone).date()
+    weekday_occurrences = {index: 0 for index in range(7)}
+    total_days_in_range = 0
+
+    while date_cursor <= end_date_only:
+        weekday_index = to_sunday_first_weekday_index(date_cursor.weekday())
+        weekday_occurrences[weekday_index] += 1
+        total_days_in_range += 1
+        date_cursor += timedelta(days=1)
+
+    weekday_call_volume_buckets = []
+    for weekday_index, weekday_label in enumerate(WEEKDAY_LABELS):
+        occurrences = weekday_occurrences[weekday_index]
+        total_calls = weekday_totals[weekday_index]
+        average_calls = (total_calls / occurrences) if occurrences > 0 else 0
+        weekday_call_volume_buckets.append({
+            'bucket': weekday_label,
+            'sortOrder': weekday_index,
+            'totalCalls': total_calls,
+            'averageCalls': round(average_calls, 2),
+            'occurrences': occurrences,
+        })
+
+    hour_call_volume_buckets = []
+    for hour_index in range(24):
+        total_calls = hour_totals[hour_index]
+        average_calls = (total_calls / total_days_in_range) if total_days_in_range > 0 else 0
+        hour_call_volume_buckets.append({
+            'bucket': f'{hour_index:02d}:00',
+            'sortOrder': hour_index,
+            'totalCalls': total_calls,
+            'averageCalls': round(average_calls, 2),
+            'occurrences': total_days_in_range,
+        })
     
     # Get service level trend (daily)
     service_level_trend_query = db.query(
-        func.date(func.to_timestamp(CDRRecord.start_epoch)).label('date'),
+        func.date(local_start_timestamp).label('date'),
         func.count(func.distinct(
             case(
                 ((CDRRecord.cc_queue_answered_epoch - CDRRecord.cc_queue_joined_epoch) <= 30,
@@ -323,7 +407,7 @@ async def get_executive_overview(
     
     # Get ASA trend (daily)
     asa_trend_query = db.query(
-        func.date(func.to_timestamp(CDRRecord.start_epoch)).label('date'),
+        func.date(local_start_timestamp).label('date'),
         func.avg(CDRRecord.cc_queue_answered_epoch - CDRRecord.cc_queue_joined_epoch).label('avg_asa'),
     ).filter(
         CDRRecord.start_epoch >= start_epoch,
@@ -344,7 +428,7 @@ async def get_executive_overview(
     
     # Get AHT trend (daily)
     aht_trend_query = db.query(
-        func.date(func.to_timestamp(CDRRecord.start_epoch)).label('date'),
+        func.date(local_start_timestamp).label('date'),
         func.avg(CDRRecord.billsec).label('avg_aht'),
     ).filter(
         CDRRecord.start_epoch >= start_epoch,
@@ -597,6 +681,10 @@ async def get_executive_overview(
             'asa': asa_trend,
             'aht': aht_trend,
             'mos': [],
+            'callVolumeBuckets': {
+                'byDayOfWeek': weekday_call_volume_buckets,
+                'byHourOfDay': hour_call_volume_buckets,
+            },
         },
         'rankings': {
             'busiestQueues': [
@@ -675,6 +763,7 @@ async def get_queue_performance(
     end_date: Optional[datetime] = Query(None),
     queue_ids: Optional[List[str]] = Query(None),
     direction: Optional[str] = Query(None),
+    timezone: str = Query("America/Phoenix"),
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -688,13 +777,17 @@ async def get_queue_performance(
     """
     
     # Default to last 7 days if not specified
+    user_timezone = get_requested_timezone(timezone)
     if not end_date:
-        end_date = datetime.utcnow()
+        end_date = datetime.now(user_timezone)
     if not start_date:
         start_date = end_date - timedelta(days=7)
+
+    start_date = ensure_utc_datetime(start_date)
+    end_date = ensure_utc_datetime(end_date)
     
     start_epoch = int(start_date.timestamp())
-    end_epoch = int((end_date.replace(hour=23, minute=59, second=59)).timestamp())
+    end_epoch = int(end_date.timestamp())
     
     # Get queues to analyze
     if not queue_ids or len(queue_ids) == 0:
@@ -806,7 +899,7 @@ async def get_queue_performance(
         asa_heatmap = {}
         
         for record in queue_records:
-            dt = datetime.fromtimestamp(record.start_epoch)
+            dt = datetime.fromtimestamp(record.start_epoch, user_timezone)
             hour = dt.hour
             day = dt.weekday()  # 0 = Monday, 6 = Sunday
             key = f"{day}_{hour}"
@@ -886,7 +979,7 @@ async def get_queue_performance(
         # Group records by hour bucket
         for record in queue_records:
             # Round timestamp down to the hour
-            dt = datetime.fromtimestamp(record.start_epoch)
+            dt = datetime.fromtimestamp(record.start_epoch, user_timezone)
             hour_bucket = dt.replace(minute=0, second=0, microsecond=0)
             timestamp_key = hour_bucket.isoformat()
             

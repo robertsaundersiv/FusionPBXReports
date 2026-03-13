@@ -36,6 +36,10 @@ function formatFiltersForAPI(filters: DashboardFilters) {
   if (filters.businessHoursOnly) {
     params.business_hours_only = true;
   }
+
+  if (filters.timezone) {
+    params.timezone = filters.timezone;
+  }
   
   console.log('Sending API request with params:', params);
   

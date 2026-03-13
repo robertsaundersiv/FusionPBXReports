@@ -154,6 +154,12 @@ def seed_database():
             can_view_unmasked_numbers=True,
         ):
             created_users.append(f"{admin_username} ({role_to_create})")
+        elif not existing_super:
+            # User already exists but has no super_admin in the system — upgrade them
+            existing_admin = db.query(User).filter(User.username == admin_username).first()
+            if existing_admin and existing_admin.role != "super_admin":
+                existing_admin.role = "super_admin"
+                created_users.append(f"{admin_username} (upgraded to super_admin)")
 
         # Create any additional configured users
         extra_users = _parse_extra_seed_users(os.getenv("EXTRA_SEED_USERS", ""))

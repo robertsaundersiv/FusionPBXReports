@@ -2,6 +2,14 @@ import { create } from 'zustand';
 import type { DashboardFilters, DateRange } from '../types';
 import { dateUtils } from '../utils/formatters';
 
+function getBrowserTimeZone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/Phoenix';
+  } catch {
+    return 'America/Phoenix';
+  }
+}
+
 interface FilterStore {
   filters: DashboardFilters;
   updateDateRange: (range: DateRange) => void;
@@ -24,7 +32,7 @@ const defaultFilters: DashboardFilters = {
   businessHoursOnly: false,
   includeOutbound: false,
   excludeDeflects: true,
-  timezone: 'America/Phoenix',
+  timezone: getBrowserTimeZone(),
 };
 
 export const useFilterStore = create<FilterStore>((set) => ({

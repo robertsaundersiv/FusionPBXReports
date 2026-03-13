@@ -32,6 +32,14 @@ export interface TrendDataPoint {
   value: number;
 }
 
+export interface CallVolumeBucketPoint {
+  bucket: string;
+  sortOrder: number;
+  totalCalls: number;
+  averageCalls: number;
+  occurrences: number;
+}
+
 export interface CallRecord {
   id: number;
   xml_cdr_uuid: string;
@@ -122,6 +130,10 @@ export interface ExecutiveOverviewData {
     asa: TrendDataPoint[];
     aht: TrendDataPoint[];
     mos: TrendDataPoint[];
+    callVolumeBuckets: {
+      byDayOfWeek: CallVolumeBucketPoint[];
+      byHourOfDay: CallVolumeBucketPoint[];
+    };
   };
   
   rankings: {

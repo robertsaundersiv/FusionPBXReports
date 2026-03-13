@@ -7,6 +7,13 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Responsi
 import { X } from 'lucide-react';
 import type { ExecutiveOverviewData, Queue, Agent, KPIMetric } from '../types';
 
+function formatHourBucketLabel(value: string) {
+  const hour = Number.parseInt(value.slice(0, 2), 10);
+  const suffix = hour >= 12 ? 'PM' : 'AM';
+  const displayHour = hour % 12 === 0 ? 12 : hour % 12;
+  return `${displayHour}${suffix[0]}`;
+}
+
 export default function ExecutiveOverview() {
   const { filters, updateDateRange, updateQueueIds, updateDirection } = useFilterStore();
   const [data, setData] = useState<ExecutiveOverviewData | null>(null);
@@ -58,6 +65,9 @@ export default function ExecutiveOverview() {
     return <div className="p-8 text-center text-red-600">Failed to load data</div>;
   }
 
+  const weekdayBuckets = data.trends.callVolumeBuckets?.byDayOfWeek ?? [];
+  const hourBuckets = data.trends.callVolumeBuckets?.byHourOfDay ?? [];
+
   return (
     <div className="overflow-auto">
       <DashboardFilterBar
@@ -92,7 +102,7 @@ export default function ExecutiveOverview() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Call Volume Trend */}
           <div className="card">
-            <h3 className="text-lg font-semibold mb-4">Call Volume Trend</h3>
+            <h3 className="text-lg font-semibold mb-4">Daily Call Volume Trend</h3>
             <ResponsiveContainer width="100%" height={300}>
               <LineChart data={data.trends.offered}>
                 <CartesianGrid strokeDasharray="3 3" />
@@ -146,6 +156,72 @@ export default function ExecutiveOverview() {
                 <Tooltip />
                 <Legend />
                 <Line type="monotone" dataKey="value" stroke="#8b5cf6" name="AHT (sec)" />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="card">
+            <div className="mb-4">
+              <h3 className="text-lg font-semibold">Call Volume by Weekday</h3>
+              <p className="text-sm text-slate-500">The number under each weekday is how many times that day occurs in the selected range.</p>
+            </div>
+            <ResponsiveContainer width="100%" height={320}>
+              <LineChart data={weekdayBuckets} margin={{ top: 8, right: 16, left: 0, bottom: 24 }}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis
+                  dataKey="bucket"
+                  interval={0}
+                  height={56}
+                  tick={({ x = 0, y = 0, payload }) => {
+                    const bucket = String(payload?.value ?? '');
+                    // const matchingBucket = weekdayBuckets.find((item) => item.bucket === bucket);
+                    // const occurrenceCount = matchingBucket?.occurrences ?? 0;
+
+                    return (
+                      <g transform={`translate(${x},${y})`}>
+                        <text x={0} y={0} textAnchor="middle" fill="#475569" fontSize={12}>
+                          <tspan x={0} dy="0.71em">{bucket}</tspan>
+                          {/* <tspan x={0} dy="1.3em" fill="#94a3b8">{occurrenceCount}</tspan> */}
+                        </text>
+                      </g>
+                    );
+                  }}
+                />
+                <YAxis yAxisId="average" />
+                <Tooltip
+                  formatter={(value: number, name: string) => [
+                    name === 'Average Calls' ? value.toFixed(2) : value,
+                    name,
+                  ]}
+                  labelFormatter={(label) => `${label}`}
+                />
+                <Legend />
+                <Line yAxisId="average" type="monotone" dataKey="averageCalls" stroke="#f59e0b" strokeWidth={3} name="Average Calls" />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+
+          <div className="card">
+            <div className="mb-4">
+              <h3 className="text-lg font-semibold">Call Volume by Hour</h3>
+              <p className="text-sm text-slate-500">Hourly buckets across the selected date range.</p>
+            </div>
+            <ResponsiveContainer width="100%" height={320}>
+              <LineChart data={hourBuckets} margin={{ top: 8, right: 16, left: 0, bottom: 16 }}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="bucket" tickFormatter={formatHourBucketLabel} height={40} interval={1} />
+                <YAxis yAxisId="average" />
+                <Tooltip
+                  formatter={(value: number, name: string) => [
+                    name === 'Average Calls' ? value.toFixed(2) : value,
+                    name,
+                  ]}
+                  labelFormatter={(label) => `${formatHourBucketLabel(String(label))} bucket`}
+                />
+                <Legend />
+                <Line yAxisId="average" type="monotone" dataKey="averageCalls" stroke="#dc2626" strokeWidth={3} name="Average Calls" dot={false} />
               </LineChart>
             </ResponsiveContainer>
           </div>
