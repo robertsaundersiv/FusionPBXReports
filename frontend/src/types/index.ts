@@ -72,6 +72,27 @@ export interface Agent {
   updated_at?: string;
 }
 
+export type UserRole = 'super_admin' | 'admin' | 'operator';
+
+export interface UserAccount {
+  id: number;
+  username: string;
+  email: string;
+  role: UserRole;
+  branch_id?: number | null;
+  enabled: boolean;
+  can_view_unmasked_numbers: boolean;
+  created_at: string;
+}
+
+export interface Branch {
+  id: number;
+  name: string;
+  description?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface ExecutiveOverviewData {
   offered: KPIMetric;
   answerRate: KPIMetric;

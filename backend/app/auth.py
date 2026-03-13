@@ -83,7 +83,40 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid authentication credentials",
         )
-    return payload
+
+    # Resolve the user from DB so role/flags reflect current state, not stale token claims.
+    from app.database import SessionLocal
+    from app.models import User
+
+    db = SessionLocal()
+    try:
+        user_id = payload.get("user_id")
+        user = None
+
+        if user_id is not None:
+            user = db.query(User).filter(User.id == user_id).first()
+        if user is None:
+            user = db.query(User).filter(User.username == username).first()
+
+        if user is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="User not found",
+            )
+
+        if not user.enabled:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="User account disabled",
+            )
+
+        return {
+            "sub": user.username,
+            "user_id": user.id,
+            "role": user.role,
+        }
+    finally:
+        db.close()
 
 
 async def get_current_admin(current_user: dict = Depends(get_current_user)) -> dict:

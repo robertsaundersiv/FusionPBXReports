@@ -6,8 +6,8 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import Queue, Agent, User, Branch, ScheduledReport, ETLPipelineStatus, OperationalNote
-from app.auth import get_current_admin, get_current_super_admin, get_current_user
-from app.schemas import QueueResponse, AgentResponse, UserResponse, ScheduledReportResponse, BranchResponse
+from app.auth import get_current_admin, get_current_super_admin, _validate_role
+from app.schemas import QueueResponse, AgentResponse, UserResponse, ScheduledReportResponse, BranchResponse, BranchCreate, UserUpdate
 from typing import List
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
@@ -26,12 +26,16 @@ async def get_branches(
 
 @router.post("/branches", response_model=BranchResponse)
 async def create_branch(
-    branch_data: dict,
+    branch_data: BranchCreate,
     current_user: dict = Depends(get_current_super_admin),
     db: Session = Depends(get_db),
 ):
     """Create branch (super_admin only)"""
-    new_branch = Branch(**branch_data)
+    existing_branch = db.query(Branch).filter(Branch.name == branch_data.name).first()
+    if existing_branch:
+        raise HTTPException(status_code=400, detail="Branch already exists")
+
+    new_branch = Branch(**branch_data.model_dump())
     db.add(new_branch)
     db.commit()
     db.refresh(new_branch)
@@ -132,7 +136,7 @@ async def get_users(
 @router.put("/users/{user_id}", response_model=UserResponse)
 async def update_user(
     user_id: int,
-    user_data: dict,
+    user_data: UserUpdate,
     current_user: dict = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
@@ -141,26 +145,59 @@ async def update_user(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    # Super admin can update everyone. Admin has restrictions.
     current_role = current_user.get("role")
+    update_data = user_data.model_dump(exclude_unset=True)
+
     if current_role == "admin" and user.role == "super_admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin cannot update Super Admin",
         )
 
-    # Prevent admin from promoting to super_admin
-    if current_role == "admin" and user_data.get("role") == "super_admin":
+    if current_role == "admin" and user.role == "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin can only manage operators",
+        )
+
+    requested_role = update_data.get("role")
+    if requested_role is not None:
+        _validate_role(requested_role)
+
+    if current_role == "admin" and requested_role == "super_admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin cannot assign super_admin role",
         )
 
-    for key, value in user_data.items():
-        if key == "hashed_password":
-            continue
-        if key == "role" and current_role == "admin" and value == "super_admin":
-            continue
+    if current_role == "admin" and requested_role not in {None, "admin", "operator"}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin can only set operator or admin roles",
+        )
+
+    # Prevent removing the final enabled super admin via disable or role change.
+    if user.role == "super_admin":
+        will_disable = update_data.get("enabled") is False
+        will_demote = requested_role is not None and requested_role != "super_admin"
+        if will_disable or will_demote:
+            remaining_enabled_super_admins = (
+                db.query(User)
+                .filter(User.role == "super_admin", User.enabled == True, User.id != user.id)
+                .count()
+            )
+            if remaining_enabled_super_admins == 0:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Cannot disable or demote the last enabled super admin",
+                )
+
+    if "branch_id" in update_data and update_data["branch_id"] is not None:
+        branch = db.query(Branch).filter(Branch.id == update_data["branch_id"]).first()
+        if not branch:
+            raise HTTPException(status_code=404, detail="Branch not found")
+
+    for key, value in update_data.items():
         if hasattr(user, key):
             setattr(user, key, value)
 
@@ -181,11 +218,33 @@ async def delete_user(
         raise HTTPException(status_code=404, detail="User not found")
 
     current_role = current_user.get("role")
+    current_user_id = current_user.get("id")
+
+    if current_user_id == user.id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You cannot delete your own account",
+        )
+
     if current_role == "admin" and user.role == "super_admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin cannot delete Super Admin",
         )
+
+    if current_role == "admin" and user.role == "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin can only delete operators",
+        )
+
+    if user.role == "super_admin":
+        remaining_super_admins = db.query(User).filter(User.role == "super_admin", User.id != user.id).count()
+        if remaining_super_admins == 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot delete the last super admin",
+            )
 
     db.delete(user)
     db.commit()

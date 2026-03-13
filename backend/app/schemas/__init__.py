@@ -80,6 +80,7 @@ class UserCreate(UserBase):
 
 class UserResponse(UserBase):
     id: int
+    email: str  # override EmailStr to accept any stored value
     enabled: bool
     can_view_unmasked_numbers: bool
     created_at: datetime
@@ -97,6 +98,22 @@ class BranchResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class UserUpdate(BaseModel):
+    role: Optional[str] = None
+    branch_id: Optional[int] = None
+    enabled: Optional[bool] = None
+
+
+class PasswordChangeRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
+class BranchCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
 
 
 # Dashboard KPI Schemas

@@ -1,7 +1,8 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { Menu, X, LogOut } from 'lucide-react';
-import { useState } from 'react';
+import { authService } from '../services/auth';
+import type { UserAccount } from '../types';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -9,7 +10,28 @@ interface LayoutProps {
 
 export default function Layout({ children }: LayoutProps) {
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [currentUser, setCurrentUser] = useState<UserAccount | null>(null);
   const location = useLocation();
+
+  useEffect(() => {
+    let mounted = true;
+
+    authService.getMe()
+      .then((user) => {
+        if (mounted) {
+          setCurrentUser(user);
+        }
+      })
+      .catch(() => {
+        if (mounted) {
+          setCurrentUser(null);
+        }
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   const handleLogout = () => {
     localStorage.removeItem('auth_token');
@@ -27,7 +49,9 @@ export default function Layout({ children }: LayoutProps) {
     { name: 'Repeat Callers', href: '/repeat-callers' },
     { name: 'Scheduled Reports', href: '/scheduled-reports' },
     { name: 'Settings', href: '/admin/settings' },
-    { name: 'Metrics Audit', href: '/admin/metrics-audit' },
+    ...(currentUser && currentUser.role !== 'operator'
+      ? [{ name: 'Metrics Audit', href: '/admin/metrics-audit' }]
+      : []),
   ];
 
   return (
@@ -67,7 +91,8 @@ export default function Layout({ children }: LayoutProps) {
             <div>
               <div className="text-sm text-gray-400 mb-2">
                 <p>Logged in as</p>
-                <p className="font-semibold text-white">Admin User</p>
+                <p className="font-semibold text-white">{currentUser?.username || 'Unknown User'}</p>
+                <p className="text-xs uppercase tracking-wide">{currentUser?.role || 'guest'}</p>
               </div>
               <button
                 onClick={handleLogout}
