@@ -1422,7 +1422,6 @@ async def get_outbound_calls(
             "caller_name_exact": 0,
             "caller_name_extension": 0,
             "caller_name_fuzzy": 0,
-            "caller_name_label": 0,
             "caller_number_extension": 0,
             "raw_identifier_fallback": 0,
         },
@@ -1505,29 +1504,20 @@ async def get_outbound_calls(
                         source = "caller_name_fuzzy"
                         break
 
-        # Last resort: use caller_id_name directly as the display label.
-        # This ensures company/trunk names ("Triad Wireless", "Phoenix Internet")
-        # show as meaningful groups rather than being collapsed into "Unknown".
-        if not user_name and record.caller_id_name:
-            stripped = record.caller_id_name.strip()
-            if stripped:
-                user_name = stripped
-                source = "caller_name_label"
+            if not user_name:
+                # Could not resolve to a known agent/extension — trunk/company call.
+                user_name = "unknown"
 
-        if not user_name:
-            # Truly no identifying info at all.
-            user_name = "unknown"
+                diagnostics["unknown_records"] += 1
+                if not has_any_identifier:
+                    diagnostics["unknown_reasons"]["missing_all_identifiers"] += 1
+                elif has_extension_uuid and not extension_uuid_matched:
+                    diagnostics["unknown_reasons"]["extension_uuid_unmapped"] += 1
+                else:
+                    diagnostics["unknown_reasons"]["unresolved_with_identifiers"] += 1
 
-            diagnostics["unknown_records"] += 1
-            if not has_any_identifier:
-                diagnostics["unknown_reasons"]["missing_all_identifiers"] += 1
-            elif has_extension_uuid and not extension_uuid_matched:
-                diagnostics["unknown_reasons"]["extension_uuid_unmapped"] += 1
-            else:
-                diagnostics["unknown_reasons"]["unresolved_with_identifiers"] += 1
-
-            unknown_label = "(blank)"
-            unknown_label_counts[unknown_label] = unknown_label_counts.get(unknown_label, 0) + 1
+                unknown_label = (record.caller_id_name or "(blank)").strip() or "(blank)"
+                unknown_label_counts[unknown_label] = unknown_label_counts.get(unknown_label, 0) + 1
         else:
             diagnostics["attributed_records"] += 1
             if source:
