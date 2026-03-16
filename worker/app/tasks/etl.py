@@ -109,9 +109,15 @@ async def _sync_recent_cdr_records(lookback_minutes: int = 5, batch_size: int = 
                     mos_value = float(raw_mos_val) if raw_mos_val not in (None, '', '0', 0) else None
 
                     if existing:
-                        # Backfill MOS if it was missing from an earlier sync
+                        # Backfill fields that were missing from earlier syncs
                         if existing.rtp_audio_in_mos is None and mos_value is not None:
                             existing.rtp_audio_in_mos = mos_value
+                        if existing.extension_uuid is None and cdr_data.get('extension_uuid'):
+                            existing.extension_uuid = cdr_data.get('extension_uuid')
+                        if existing.cc_agent_uuid is None and cdr_data.get('cc_agent_uuid'):
+                            existing.cc_agent_uuid = cdr_data.get('cc_agent_uuid')
+                        if existing.cc_agent is None and cdr_data.get('cc_agent'):
+                            existing.cc_agent = cdr_data.get('cc_agent')
                         batch_skipped += 1
                         continue
                     
@@ -132,9 +138,12 @@ async def _sync_recent_cdr_records(lookback_minutes: int = 5, batch_size: int = 
                         end_epoch=int(end_epoch) if end_epoch else None,
                         duration=int(cdr_data.get('duration', 0)),
                         billsec=int(cdr_data.get('billsec', 0)),
+                        extension_uuid=cdr_data.get('extension_uuid'),
                         cc_queue=cdr_data.get('cc_queue'),
                         cc_queue_joined_epoch=int(cdr_data.get('cc_queue_joined_epoch', 0)) if cdr_data.get('cc_queue_joined_epoch') else None,
                         cc_queue_answered_epoch=int(cdr_data.get('cc_queue_answered_epoch', 0)) if cdr_data.get('cc_queue_answered_epoch') else None,
+                        cc_agent_uuid=cdr_data.get('cc_agent_uuid'),
+                        cc_agent=cdr_data.get('cc_agent'),
                         cc_agent_type=cdr_data.get('cc_agent_type'),
                         cc_member_uuid=cdr_data.get('cc_member_uuid'),
                         status=cdr_data.get('hangup_cause', 'UNKNOWN'),

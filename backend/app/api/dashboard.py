@@ -1411,6 +1411,7 @@ async def get_outbound_calls(
             "extension_uuid": 0,
             "caller_name_exact": 0,
             "caller_name_extension": 0,
+            "caller_number_extension": 0,
             "raw_identifier_fallback": 0,
         },
         "unknown_reasons": {
@@ -1474,6 +1475,12 @@ async def get_outbound_calls(
         if not user_name and record.cc_agent:
             user_name = record.cc_agent
             source = "raw_identifier_fallback"
+
+        # For outbound calls, caller_id_number is the dialing extension — try it directly.
+        if not user_name and record.caller_id_number:
+            user_name = extension_number_map.get(str(record.caller_id_number).strip())
+            if user_name:
+                source = "caller_number_extension"
 
         if not user_name:
             # No identifying agent info; bucket as unknown.
