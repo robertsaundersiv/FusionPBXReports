@@ -1,5 +1,5 @@
 import apiClient from './api';
-import type { QualityHealthData, UserAccount, UserRole } from '../types';
+import type { QualityHealthData, RunAllQualityHealthTasksResponse, UserAccount, UserRole } from '../types';
 
 export const adminService = {
   async createUser(payload: { username: string; email: string; password: string; role: UserRole }): Promise<UserAccount> {
@@ -24,6 +24,11 @@ export const adminService = {
 
   async getQualityHealth(): Promise<QualityHealthData> {
     const response = await apiClient.get('/api/v1/admin/quality-health');
+    return response.data;
+  },
+
+  async runAllQualityHealthTasks(): Promise<RunAllQualityHealthTasksResponse> {
+    const response = await apiClient.post('/api/v1/admin/quality-health/run-all');
     return response.data;
   },
 };

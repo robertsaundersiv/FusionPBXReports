@@ -4,7 +4,7 @@ import type { QualityHealthData } from '../types';
 
 function formatTimestamp(value: string | null) {
   if (!value) {
-    return 'Unavailable';
+    return 'Not yet run';
   }
 
   return new Date(value).toLocaleString('en-US', {
@@ -17,13 +17,30 @@ function formatTimestamp(value: string | null) {
   });
 }
 
+function formatTaskStatus(value: string) {
+  if (!value) {
+    return 'Pending';
+  }
+
+  if (value.toUpperCase() === 'UNAVAILABLE') {
+    return 'Pending';
+  }
+
+  return value;
+}
+
 export default function QualityHealth() {
   const [data, setData] = useState<QualityHealthData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [runAllPending, setRunAllPending] = useState(false);
+  const [runAllMessage, setRunAllMessage] = useState<string | null>(null);
 
-  useEffect(() => {
-    adminService.getQualityHealth()
+  const loadData = () => {
+    setLoading(true);
+    setError(null);
+
+    return adminService.getQualityHealth()
       .then((response) => {
         setData(response);
         setLoading(false);
@@ -32,7 +49,26 @@ export default function QualityHealth() {
         setError(requestError.response?.data?.detail || 'Failed to load quality and task health data.');
         setLoading(false);
       });
+  };
+
+  useEffect(() => {
+    loadData();
   }, []);
+
+  const handleRunAllTasks = async () => {
+    setRunAllPending(true);
+    setRunAllMessage(null);
+
+    try {
+      const response = await adminService.runAllQualityHealthTasks();
+      setRunAllMessage(`${response.message} Chain ID: ${response.chain_id}`);
+      await loadData();
+    } catch (requestError: any) {
+      setRunAllMessage(requestError.response?.data?.detail || 'Failed to queue Celery tasks.');
+    } finally {
+      setRunAllPending(false);
+    }
+  };
 
   if (loading) {
     return <div className="p-8 text-center">Loading Quality & Health...</div>;
@@ -74,8 +110,24 @@ export default function QualityHealth() {
             <h2 className="text-lg font-semibold text-gray-900">Celery Tasks</h2>
             <p className="mt-1 text-sm text-gray-600">Last observed execution time for each active scheduled task.</p>
           </div>
-          <div className="text-sm text-gray-500">Errors: {data.pipeline_status.error_count}</div>
+          <div className="flex items-center gap-4">
+            <div className="text-sm text-gray-500">Errors: {data.pipeline_status.error_count}</div>
+            <button
+              type="button"
+              onClick={handleRunAllTasks}
+              disabled={runAllPending}
+              className="inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-blue-300"
+            >
+              {runAllPending ? 'Queuing...' : 'Run All Celery Tasks'}
+            </button>
+          </div>
         </div>
+
+        {runAllMessage ? (
+          <div className="mt-4 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-700">
+            {runAllMessage}
+          </div>
+        ) : null}
 
         {data.pipeline_status.error_message ? (
           <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -104,7 +156,7 @@ export default function QualityHealth() {
                   <td className="py-4 pr-4 text-gray-700">{task.schedule}</td>
                   <td className="py-4 pr-4 text-gray-700">{formatTimestamp(task.last_executed_at)}</td>
                   <td className="py-4 pr-4 text-gray-700">{task.source}</td>
-                  <td className="py-4 text-gray-700 uppercase">{task.status}</td>
+                  <td className="py-4 text-gray-700 uppercase">{formatTaskStatus(task.status)}</td>
                 </tr>
               ))}
             </tbody>

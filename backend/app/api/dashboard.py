@@ -1,9 +1,10 @@
 """
 API routes for dashboard data
 """
+import re
 from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.orm import Session
-from sqlalchemy import func, Integer, case, desc, or_, distinct, cast, String
+from sqlalchemy import func, Integer, case, desc, or_, cast, String
 from app.database import get_db
 from app.models import CDRRecord, Queue, Agent, DailyAggregate, HourlyAggregate, User, Extension
 from app.auth import get_current_user
@@ -88,14 +89,6 @@ async def get_executive_overview(
     - Ranked tables
     """
     
-    # Debug logging
-    print(f"=== Executive Overview API Called ===")
-    print(f"Start date: {start_date}")
-    print(f"End date: {end_date}")
-    print(f"Queue IDs: {queue_ids}")
-    print(f"Direction: {direction}")
-    print(f"Timezone: {timezone}")
-
     user_timezone = get_requested_timezone(timezone)
     
     # Default to last 7 days if not specified
@@ -110,15 +103,12 @@ async def get_executive_overview(
     start_epoch = int(start_date.timestamp())
     end_epoch = int(end_date.timestamp())
     
-    print(f"Start epoch: {start_epoch}, End epoch: {end_epoch}")
-    
     # Convert queue UUIDs to cc_queue identifiers (extension@context format)
     # Since queue_context may be NULL, we'll filter using just the extension part
     queue_extensions = None
     if queue_ids:
         queues = db.query(Queue).filter(Queue.queue_id.in_(queue_ids)).all()
         queue_extensions = [q.queue_extension for q in queues if q.queue_extension]
-        print(f"Converted to queue extensions: {queue_extensions}")
     
     # Query base CDR data
     base_query = db.query(CDRRecord).filter(
@@ -214,45 +204,47 @@ async def get_executive_overview(
     print(f"Calculated abandon_rate: {abandon_rate}%")
     print(f"Sum: {answer_rate + abandon_rate}%")
     
-    # ASA
-    asa_records = base_query.filter(
+    # Core aggregates (DB-side for performance)
+    avg_asa = base_query.filter(
         CDRRecord.cc_queue_answered_epoch.isnot(None),
         CDRRecord.cc_queue_joined_epoch.isnot(None),
-    ).all()
-    avg_asa = 0
-    if asa_records:
-        avg_asa = sum([r.cc_queue_answered_epoch - r.cc_queue_joined_epoch for r in asa_records]) / len(asa_records)
-    
-    # AHT
-    answered_records = base_query.filter(
+    ).with_entities(
+        func.avg(CDRRecord.cc_queue_answered_epoch - CDRRecord.cc_queue_joined_epoch)
+    ).scalar() or 0
+
+    avg_aht = base_query.filter(
         CDRRecord.cc_queue_answered_epoch.isnot(None),
         CDRRecord.cc_queue_joined_epoch.isnot(None),
-    ).all()
-    avg_aht = 0
-    if answered_records:
-        avg_aht = sum([r.billsec for r in answered_records]) / len(answered_records)
-    
-    # MOS
-    mos_records = base_query.filter(
+    ).with_entities(
+        func.avg(CDRRecord.billsec)
+    ).scalar() or 0
+
+    avg_mos = base_query.filter(
         CDRRecord.rtp_audio_in_mos > 0,
-    ).all()
-    avg_mos = 0
-    if mos_records:
-        avg_mos = sum([r.rtp_audio_in_mos for r in mos_records]) / len(mos_records)
-    
-    # Total talk time
-    total_talk_time = sum([r.billsec for r in base_query.all()])
-    
+    ).with_entities(
+        func.avg(CDRRecord.rtp_audio_in_mos)
+    ).scalar() or 0
+
+    total_talk_time = base_query.with_entities(
+        func.coalesce(func.sum(CDRRecord.billsec), 0)
+    ).scalar() or 0
+
     # Service level (default 30s)
-    service_level_records = base_query.filter(
+    threshold = 30
+    service_level_total = base_query.filter(
         CDRRecord.cc_queue_answered_epoch.isnot(None),
         CDRRecord.cc_queue_joined_epoch.isnot(None),
-    ).all()
-    service_level = 0
-    if service_level_records:
-        threshold = 30
-        within_threshold = sum(1 for r in service_level_records if (r.cc_queue_answered_epoch - r.cc_queue_joined_epoch) <= threshold)
-        service_level = (within_threshold / len(service_level_records) * 100)
+    ).with_entities(
+        func.count()
+    ).scalar() or 0
+    service_level_within = base_query.filter(
+        CDRRecord.cc_queue_answered_epoch.isnot(None),
+        CDRRecord.cc_queue_joined_epoch.isnot(None),
+        (CDRRecord.cc_queue_answered_epoch - CDRRecord.cc_queue_joined_epoch) <= threshold,
+    ).with_entities(
+        func.count()
+    ).scalar() or 0
+    service_level = (service_level_within / service_level_total * 100) if service_level_total > 0 else 0
     
     # Get trend data (daily) - count unique queue entries by (caller, join_epoch)
     local_start_timestamp = local_timestamp_expr(CDRRecord.start_epoch, timezone)
@@ -443,38 +435,20 @@ async def get_executive_overview(
     
     busiest = busiest_queues_query.group_by(CDRRecord.cc_queue).order_by(desc('call_count')).limit(3).all()
     
-    print(f"Raw busiest result: {busiest}")
-    
-    # Debug: show all queues in the database
     all_queues = db.query(Queue).all()
-    print(f"Number of queues in DB: {len(all_queues)}")
-    for q in all_queues[:5]:  # Show first 5
-        print(f"Queue: id={q.queue_id}, name={q.name}, ext={q.queue_extension}")
-    
+    queue_map_by_extension = {}
+    for queue in all_queues:
+        if not queue.queue_extension:
+            continue
+        queue_map_by_extension[queue.queue_extension] = queue
+        if "@" in queue.queue_extension:
+            queue_map_by_extension[queue.queue_extension.split("@", 1)[0]] = queue
+
     busiest_queues = []
     for cc_queue, call_count in busiest:
-        print(f"Processing cc_queue: {cc_queue}, call_count: {call_count}")
-        queue = None
-        
-        # Try 1: Direct match by full cc_queue string
-        queue = db.query(Queue).filter(Queue.queue_extension == cc_queue).first()
-        if queue:
-            print(f"Found by full cc_queue match")
-        
-        # Try 2: Match by extension only (before @)
-        if not queue and '@' in cc_queue:
-            queue_ext = cc_queue.split('@')[0]
-            print(f"Trying match by extension: {queue_ext}")
-            queue = db.query(Queue).filter(Queue.queue_extension == queue_ext).first()
-            if queue:
-                print(f"Found by extension match")
-        
-        # Try 3: Check if cc_queue is in queue_extension (contains match)
-        if not queue:
-            print(f"Trying LIKE match")
-            queue = db.query(Queue).filter(Queue.queue_extension.contains(cc_queue.split('@')[0])).first()
-            if queue:
-                print(f"Found by LIKE match")
+        queue = queue_map_by_extension.get(cc_queue)
+        if not queue and cc_queue and '@' in cc_queue:
+            queue = queue_map_by_extension.get(cc_queue.split('@', 1)[0])
         
         if queue:
             busiest_queues.append({
@@ -483,13 +457,11 @@ async def get_executive_overview(
                 'callsHandled': call_count
             })
         else:
-            print(f"No queue found, using cc_queue: {cc_queue}")
             busiest_queues.append({
                 'queueId': None,
                 'queueName': cc_queue,
                 'callsHandled': call_count
             })
-    print(f"Busiest queues: {busiest_queues}")
     
     # Get worst abandon queues (top 3 by abandon rate)
     # Use same methodology as overall calculation - group by (caller, join_time) first, then attribute to queue
@@ -569,19 +541,9 @@ async def get_executive_overview(
     
     worst_abandon_queues = []
     for cc_queue, queue_abandon_rate, abandoned, total_queued in abandon_rates[:3]:
-        queue = None
-        
-        # Try 1: Direct match by full cc_queue string
-        queue = db.query(Queue).filter(Queue.queue_extension == cc_queue).first()
-        
-        # Try 2: Match by extension only (before @)
-        if not queue and '@' in cc_queue:
-            queue_ext = cc_queue.split('@')[0]
-            queue = db.query(Queue).filter(Queue.queue_extension == queue_ext).first()
-        
-        # Try 3: Check if cc_queue is in queue_extension (contains match)
-        if not queue:
-            queue = db.query(Queue).filter(Queue.queue_extension.contains(cc_queue.split('@')[0])).first()
+        queue = queue_map_by_extension.get(cc_queue)
+        if not queue and cc_queue and '@' in cc_queue:
+            queue = queue_map_by_extension.get(cc_queue.split('@', 1)[0])
         
         if queue:
             worst_abandon_queues.append({
@@ -597,8 +559,6 @@ async def get_executive_overview(
                 'abandonRate': queue_abandon_rate,
                 'callsAbandoned': abandoned
             })
-    
-    print(f"Worst abandon queues: {worst_abandon_queues}")
     
     return {
         'offered': {
@@ -1407,9 +1367,23 @@ async def get_outbound_calls(
             extension_filters = [CDRRecord.cc_queue.like(f"{ext}@%") for ext in queue_extensions]
             base_query = base_query.filter(or_(*extension_filters))
     
-    # Build extension UUID to user name mapping
+    # Build extension mappings used for user attribution.
     extensions = db.query(Extension).all()
-    extension_uuid_map = {ext.extension_uuid: ext.user_name for ext in extensions if ext.extension_uuid and ext.user_name}
+    extension_uuid_map = {
+        str(ext.extension_uuid): ext.user_name
+        for ext in extensions
+        if ext.extension_uuid and ext.user_name
+    }
+    extension_number_map = {
+        str(ext.extension): ext.user_name
+        for ext in extensions
+        if ext.extension and ext.user_name
+    }
+    known_user_name_map = {
+        str(ext.user_name).strip().lower(): ext.user_name
+        for ext in extensions
+        if ext.user_name
+    }
     
     # Build agent identifier map for resolving canonical agent names
     agent_map = {}
@@ -1427,33 +1401,104 @@ async def get_outbound_calls(
     # Group by extension to collect per-user stats
     user_stats = {}  # user_name/extension_uuid -> {count, talk_time_sec}
     prefix_stats = {}  # first_3_letters -> {count, talk_time_sec}
-
-    # Add guard logging for records fetched
-    record_count = base_query.count()
-    print(f"Outbound call records retrieved: {record_count}")
+    diagnostics = {
+        "total_records": 0,
+        "attributed_records": 0,
+        "unknown_records": 0,
+        "unknown_rate_pct": 0,
+        "attribution_sources": {
+            "agent_map": 0,
+            "extension_uuid": 0,
+            "caller_name_exact": 0,
+            "caller_name_extension": 0,
+            "raw_identifier_fallback": 0,
+        },
+        "unknown_reasons": {
+            "missing_all_identifiers": 0,
+            "extension_uuid_unmapped": 0,
+            "unresolved_with_identifiers": 0,
+        },
+        "top_unknown_caller_labels": [],
+    }
+    unknown_label_counts = {}
 
     for record in base_query.all():
+        diagnostics["total_records"] += 1
+
         # Resolve canonical agent name, preferring call-center agent identifiers.
         user_name = None
+        source = None
+        has_cc_agent_uuid = bool(record.cc_agent_uuid)
+        has_cc_agent = bool(record.cc_agent)
+        has_extension_uuid = bool(record.extension_uuid)
+        has_any_identifier = has_cc_agent_uuid or has_cc_agent or has_extension_uuid
+        extension_uuid_matched = False
 
         if record.cc_agent_uuid:
             user_name = agent_map.get(record.cc_agent_uuid)
+            if user_name:
+                source = "agent_map"
 
         if not user_name and record.cc_agent:
             user_name = agent_map.get(record.cc_agent)
+            if user_name:
+                source = "agent_map"
 
         if record.extension_uuid:
-            user_name = user_name or extension_uuid_map.get(record.extension_uuid)
+            user_name = user_name or extension_uuid_map.get(str(record.extension_uuid))
+            if user_name and source is None:
+                source = "extension_uuid"
+                extension_uuid_matched = True
+
+        # Fallback for outbound calls that do not populate call-center fields:
+        # map caller_id_name via known names or embedded extension numbers.
+        if not user_name and record.caller_id_name:
+            caller_label = str(record.caller_id_name).strip()
+            if caller_label:
+                user_name = known_user_name_map.get(caller_label.lower())
+                if user_name:
+                    source = "caller_name_exact"
+
+            if not user_name:
+                for token in re.findall(r"\b\d{3,6}\b", caller_label):
+                    mapped_name = extension_number_map.get(token)
+                    if mapped_name:
+                        user_name = mapped_name
+                        source = "caller_name_extension"
+                        break
 
         if not user_name and record.cc_agent_uuid:
             user_name = record.cc_agent_uuid
+            source = "raw_identifier_fallback"
 
         if not user_name and record.cc_agent:
             user_name = record.cc_agent
+            source = "raw_identifier_fallback"
 
         if not user_name:
-            # No identifying agent info; still count as "unknown agent"
+            # No identifying agent info; bucket as unknown.
             user_name = "unknown"
+
+            diagnostics["unknown_records"] += 1
+            if not has_any_identifier:
+                diagnostics["unknown_reasons"]["missing_all_identifiers"] += 1
+            elif has_extension_uuid and not extension_uuid_matched:
+                diagnostics["unknown_reasons"]["extension_uuid_unmapped"] += 1
+            else:
+                diagnostics["unknown_reasons"]["unresolved_with_identifiers"] += 1
+
+            unknown_label = (record.caller_id_name or "(blank)").strip() if record.caller_id_name else "(blank)"
+            unknown_label_counts[unknown_label] = unknown_label_counts.get(unknown_label, 0) + 1
+        else:
+            diagnostics["attributed_records"] += 1
+            if source:
+                diagnostics["attribution_sources"][source] += 1
+
+        normalized_name = (user_name or "").strip()
+        if normalized_name.lower() in {"", "unknown", "none", "null", "n/a", "unassigned"}:
+            user_name = "Unknown"
+        else:
+            user_name = normalized_name
 
         # Determine talk time via billsec
         talk_time = (record.billsec or 0)
@@ -1481,8 +1526,14 @@ async def get_outbound_calls(
             "aht_seconds": aht,
         })
 
-    # Sort by count descending
-    by_user.sort(key=lambda x: (-x["count"], x["agent_name"]))
+    # Sort by count descending, but keep Unknown at the bottom.
+    by_user.sort(
+        key=lambda x: (
+            (x["agent_name"] or "").strip().lower() in {"unknown", "", "none", "null", "n/a", "unassigned"},
+            -x["count"],
+            x["agent_name"],
+        )
+    )
 
     try:
         # Format by_prefix results
@@ -1495,14 +1546,32 @@ async def get_outbound_calls(
                 "aht_seconds": aht,
             })
 
-        # Sort by count descending
-        by_prefix.sort(key=lambda x: -x["count"])
+        # Sort by count descending, but keep unknown prefixes at the bottom.
+        by_prefix.sort(
+            key=lambda x: (
+                (x["prefix"] or "").strip().lower() in {"unk", "unknown", "", "n/a"},
+                -x["count"],
+                x["prefix"],
+            )
+        )
+
+        if diagnostics["total_records"] > 0:
+            diagnostics["unknown_rate_pct"] = round(
+                (diagnostics["unknown_records"] / diagnostics["total_records"]) * 100,
+                2,
+            )
+
+        diagnostics["top_unknown_caller_labels"] = [
+            {"label": label, "count": count}
+            for label, count in sorted(unknown_label_counts.items(), key=lambda item: item[1], reverse=True)[:10]
+        ]
 
         return {
             "start": start_date,
             "end": end_date,
             "by_user": by_user,
             "by_prefix": by_prefix,
+            "diagnostics": diagnostics,
         }
     except Exception as e:
         import traceback

@@ -45,6 +45,7 @@ export default function OutboundCalls() {
     sortOrder: 'desc',
     searchQuery: '',
   });
+  const diagnostics = data?.diagnostics;
 
   useEffect(() => {
     const loadMetadata = async () => {
@@ -275,6 +276,15 @@ export default function OutboundCalls() {
           showQueues={false}
           showDirection={false}
         />
+
+        {diagnostics && (
+          <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
+            <h2 className="text-base font-semibold text-amber-900">Outbound Attribution Diagnostics</h2>
+            <p className="mt-1 text-sm text-amber-800">
+              Unknown records: <span className="font-semibold">{diagnostics.unknown_records.toLocaleString()}</span> / {diagnostics.total_records.toLocaleString()} ({diagnostics.unknown_rate_pct}%)
+            </p>
+          </div>
+        )}
 
         {error && (
           <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded">

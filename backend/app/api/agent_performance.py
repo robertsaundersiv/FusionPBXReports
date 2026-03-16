@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.auth import get_current_user
 from app.database import get_db
-from app.models import CDRRecord, Queue, Agent
+from app.models import CDRRecord, Queue, Agent, Extension
 from app.utils.agent_performance_utils import (
     normalize_agent_id,
     normalize_agent_name,
@@ -68,7 +68,16 @@ def build_agent_name_map(db: Session, enabled_only: bool = True) -> Dict[str, st
     if enabled_only:
         query = query.filter(Agent.enabled == True)
     agents = query.all()
-    return {agent.agent_uuid: agent.agent_name for agent in agents}
+    name_map = {agent.agent_uuid: agent.agent_name for agent in agents if agent.agent_uuid and agent.agent_name}
+
+    # Fallback mapping for records where extension_uuid is present but
+    # call-center agent identifiers are not populated.
+    extensions = db.query(Extension).all()
+    for extension in extensions:
+        if extension.extension_uuid and extension.user_name:
+            name_map[extension.extension_uuid] = extension.user_name
+
+    return name_map
 
 
 def get_accessible_agent_identifiers(db: Session, current_user: dict) -> Optional[Set[str]]:
@@ -105,6 +114,7 @@ def apply_common_filters(
             or_(
                 CDRRecord.cc_agent_uuid.in_(agent_ids),
                 CDRRecord.cc_agent.in_(agent_ids),
+                CDRRecord.extension_uuid.in_(agent_ids),
             )
         )
 
@@ -123,6 +133,7 @@ def apply_common_filters(
         or_(
             CDRRecord.cc_agent_uuid.isnot(None),
             CDRRecord.cc_agent.isnot(None),
+            CDRRecord.extension_uuid.isnot(None),
         )
     )
 

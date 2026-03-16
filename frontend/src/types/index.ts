@@ -149,6 +149,12 @@ export interface QualityHealthData {
   tasks: QualityHealthTaskStatus[];
 }
 
+export interface RunAllQualityHealthTasksResponse {
+  message: string;
+  chain_id: string;
+  tasks: string[];
+}
+
 export interface HeatmapDataPoint {
   day: number;  // 0-6 (Mon-Sun)
   hour: number; // 0-23
@@ -416,9 +422,35 @@ export interface OutboundCallPrefixRow {
   aht_seconds: number;
 }
 
+export interface OutboundUnknownLabelRow {
+  label: string;
+  count: number;
+}
+
+export interface OutboundDiagnostics {
+  total_records: number;
+  attributed_records: number;
+  unknown_records: number;
+  unknown_rate_pct: number;
+  attribution_sources: {
+    agent_map: number;
+    extension_uuid: number;
+    caller_name_exact: number;
+    caller_name_extension: number;
+    raw_identifier_fallback: number;
+  };
+  unknown_reasons: {
+    missing_all_identifiers: number;
+    extension_uuid_unmapped: number;
+    unresolved_with_identifiers: number;
+  };
+  top_unknown_caller_labels: OutboundUnknownLabelRow[];
+}
+
 export interface OutboundCallsResponse {
   start: string;
   end: string;
   by_user: OutboundCallUserRow[];
   by_prefix: OutboundCallPrefixRow[];
+  diagnostics?: OutboundDiagnostics;
 }

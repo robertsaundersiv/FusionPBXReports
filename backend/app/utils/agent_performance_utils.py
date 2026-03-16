@@ -11,6 +11,8 @@ def normalize_agent_id(cdr) -> Optional[str]:
     
     cc_agent typically contains the actual agent UUID, while cc_agent_uuid
     may contain call/bridge UUIDs in some cases.
+    As a final fallback for records missing call-center agent fields,
+    use extension_uuid when available.
     """
     # Prefer cc_agent as it's more reliable for agent identification
     agent = getattr(cdr, "cc_agent", None)
@@ -20,6 +22,9 @@ def normalize_agent_id(cdr) -> Optional[str]:
     agent_uuid = getattr(cdr, "cc_agent_uuid", None)
     if agent_uuid:
         return agent_uuid.strip()
+    extension_uuid = getattr(cdr, "extension_uuid", None)
+    if extension_uuid:
+        return extension_uuid.strip()
     return None
 
 

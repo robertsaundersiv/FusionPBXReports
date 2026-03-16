@@ -3,6 +3,7 @@ import json
 import os
 from datetime import datetime
 
+from celery import Celery, chain, signature
 import redis
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func, or_
@@ -42,6 +43,21 @@ TASK_METADATA = {
         "schedule": "Daily at 2:00 AM UTC",
     },
 }
+
+
+FORCE_RUN_TASK_SEQUENCE = [
+    {"task": "app.tasks.sync_extensions", "kwargs": {}},
+    {"task": "app.tasks.sync_metadata", "kwargs": {}},
+    {"task": "app.tasks.ingest_cdr_records", "kwargs": {}},
+    {"task": "app.tasks.compute_hourly_aggregates", "kwargs": {}},
+    {"task": "app.tasks.compute_daily_aggregates", "kwargs": {}},
+    {"task": "app.tasks.cleanup_old_cdr_records", "kwargs": {"retention_days": 1825}},
+]
+
+
+def _get_control_celery_app() -> Celery:
+    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    return Celery("admin-control", broker=redis_url, backend=redis_url)
 
 
 def _parse_result_timestamp(value: str | None) -> datetime | None:
@@ -393,20 +409,55 @@ async def get_quality_health(
     """Get super-admin quality and worker task health details."""
     etl_status = db.query(ETLPipelineStatus).first()
     task_status = _load_quality_health_task_status(db)
+    task_last_executed = {
+        task["task_name"]: task.get("last_executed_at")
+        for task in task_status
+    }
+
+    last_successful_run = etl_status.last_successful_run if etl_status else None
+    if last_successful_run is None:
+        last_successful_run = task_last_executed.get("app.tasks.ingest_cdr_records")
+
+    last_queue_sync = etl_status.last_queue_sync if etl_status else None
+    if last_queue_sync is None:
+        last_queue_sync = task_last_executed.get("app.tasks.sync_metadata")
+
+    last_agent_sync = etl_status.last_agent_sync if etl_status else None
+    if last_agent_sync is None:
+        last_agent_sync = task_last_executed.get("app.tasks.sync_metadata")
 
     return {
         "pipeline_status": {
             "status": etl_status.status if etl_status else "idle",
-            "last_successful_run": etl_status.last_successful_run if etl_status else None,
+            "last_successful_run": last_successful_run,
             "last_ingested_insert_date": etl_status.last_ingested_insert_date if etl_status else None,
-            "last_queue_sync": etl_status.last_queue_sync if etl_status else None,
-            "last_agent_sync": etl_status.last_agent_sync if etl_status else None,
+            "last_queue_sync": last_queue_sync,
+            "last_agent_sync": last_agent_sync,
             "last_hourly_agg": etl_status.last_hourly_agg if etl_status else None,
             "last_daily_agg": etl_status.last_daily_agg if etl_status else None,
             "error_message": etl_status.error_message if etl_status else None,
             "error_count": etl_status.error_count if etl_status else 0,
         },
         "tasks": task_status,
+    }
+
+
+@router.post("/quality-health/run-all")
+async def run_all_quality_health_tasks(
+    current_user: dict = Depends(get_current_super_admin),
+):
+    """Enqueue all scheduled Celery tasks in operational dependency order."""
+    control_app = _get_control_celery_app()
+    task_signatures = [
+        signature(task_config["task"], kwargs=task_config["kwargs"], app=control_app)
+        for task_config in FORCE_RUN_TASK_SEQUENCE
+    ]
+    result = chain(*task_signatures).apply_async()
+
+    return {
+        "message": "Queued full Celery task run.",
+        "chain_id": result.id,
+        "tasks": [task_config["task"] for task_config in FORCE_RUN_TASK_SEQUENCE],
     }
 
 
