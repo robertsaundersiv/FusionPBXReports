@@ -2,18 +2,15 @@
 import { useEffect, useMemo, useState } from 'react';
 import { authService } from '../services/auth';
 import { adminService } from '../services/admin';
-import type { AgentGroupRule, Branch, UserAccount, UserRole } from '../types';
+import type { UserAccount, UserRole } from '../types';
 
 type UserDraft = {
   role: UserRole;
-  branch_id: number | null;
 };
 
 export default function AdminSettings() {
   const [currentUser, setCurrentUser] = useState<UserAccount | null>(null);
   const [users, setUsers] = useState<UserAccount[]>([]);
-  const [branches, setBranches] = useState<Branch[]>([]);
-  const [agentGroupRules, setAgentGroupRules] = useState<AgentGroupRule[]>([]);
   const [drafts, setDrafts] = useState<Record<number, UserDraft>>({});
   const [loading, setLoading] = useState(true);
   const [savingUserId, setSavingUserId] = useState<number | null>(null);
@@ -24,12 +21,6 @@ export default function AdminSettings() {
   const [pageError, setPageError] = useState<string | null>(null);
   const [passwordForm, setPasswordForm] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
   const [passwordSaving, setPasswordSaving] = useState(false);
-  const [branchForm, setBranchForm] = useState({ name: '', description: '' });
-  const [branchSaving, setBranchSaving] = useState(false);
-  const [deletingBranchId, setDeletingBranchId] = useState<number | null>(null);
-  const [ruleForm, setRuleForm] = useState({ match_value: '', branch_id: '' });
-  const [ruleSaving, setRuleSaving] = useState(false);
-  const [deletingRuleId, setDeletingRuleId] = useState<number | null>(null);
   const [newUserForm, setNewUserForm] = useState({ username: '', email: '', password: '', confirmPassword: '', role: 'operator' as UserRole });
 
   useEffect(() => {
@@ -46,26 +37,19 @@ export default function AdminSettings() {
         setCurrentUser(me);
 
         if (me.role !== 'operator') {
-          const [fetchedUsers, fetchedBranches, fetchedRules] = await Promise.all([
-            adminService.getUsers(),
-            adminService.getBranches(),
-            me.role === 'super_admin' ? adminService.getAgentGroupRules() : Promise.resolve([]),
-          ]);
+          const fetchedUsers = await adminService.getUsers();
 
           if (!mounted) {
             return;
           }
 
           setUsers(fetchedUsers);
-          setBranches(fetchedBranches);
-          setAgentGroupRules(fetchedRules);
           setDrafts(
             Object.fromEntries(
               fetchedUsers.map((user) => [
                 user.id,
                 {
                   role: user.role,
-                  branch_id: user.branch_id ?? null,
                 },
               ])
             )
@@ -114,13 +98,6 @@ export default function AdminSettings() {
     ? ['operator', 'admin', 'super_admin']
     : ['operator', 'admin'];
 
-  const getGroupLabel = (user: Pick<UserAccount, 'role' | 'branch_id'>) => {
-    if (user.role === 'super_admin') {
-      return 'All';
-    }
-    return branches.find((branch) => branch.id === user.branch_id)?.name || 'Unassigned';
-  };
-
   const updateDraft = (userId: number, key: keyof UserDraft, value: UserDraft[keyof UserDraft]) => {
     setDrafts((current) => ({
       ...current,
@@ -164,11 +141,7 @@ export default function AdminSettings() {
 
     try {
       setSavingUserId(user.id);
-      const updates = {
-        ...draft,
-        branch_id: draft.role === 'super_admin' ? null : draft.branch_id,
-      };
-      const updatedUser = await adminService.updateUser(user.id, updates);
+      const updatedUser = await adminService.updateUser(user.id, draft);
       setUsers((current) => current.map((entry) => (entry.id === user.id ? updatedUser : entry)));
       setPageMessage(`Updated ${updatedUser.username}.`);
     } catch (error: any) {
@@ -228,7 +201,6 @@ export default function AdminSettings() {
         ...current,
         [createdUser.id]: {
           role: createdUser.role,
-          branch_id: createdUser.branch_id ?? null,
         },
       }));
 
@@ -242,114 +214,12 @@ export default function AdminSettings() {
     }
   };
 
-  const handleBranchCreate = async (event: React.FormEvent) => {
-    event.preventDefault();
-    setPageMessage(null);
-    setPageError(null);
-
-    try {
-      setBranchSaving(true);
-      const createdBranch = await adminService.createBranch(branchForm);
-      setBranches((current) => [...current, createdBranch].sort((left, right) => left.name.localeCompare(right.name)));
-      setBranchForm({ name: '', description: '' });
-      setPageMessage(`Created group ${createdBranch.name}.`);
-    } catch (error: any) {
-      setPageError(error.response?.data?.detail || 'Unable to create group.');
-    } finally {
-      setBranchSaving(false);
-    }
-  };
-
-  const handleBranchDelete = async (branch: Branch) => {
-    const confirmed = window.confirm(`Delete group ${branch.name}? Users in this group will become unassigned.`);
-    if (!confirmed) {
-      return;
-    }
-
-    setPageMessage(null);
-    setPageError(null);
-
-    try {
-      setDeletingBranchId(branch.id);
-      const response = await adminService.deleteBranch(branch.id);
-      setBranches((current) => current.filter((entry) => entry.id !== branch.id));
-      setUsers((current) => current.map((user) => (
-        user.branch_id === branch.id ? { ...user, branch_id: null } : user
-      )));
-      setDrafts((current) => {
-        const next = { ...current };
-        Object.keys(next).forEach((userId) => {
-          if (next[Number(userId)]?.branch_id === branch.id) {
-            next[Number(userId)] = {
-              ...next[Number(userId)],
-              branch_id: null,
-            };
-          }
-        });
-        return next;
-      });
-      setPageMessage(response.message || `Deleted group ${branch.name}.`);
-    } catch (error: any) {
-      setPageError(error.response?.data?.detail || `Unable to delete group ${branch.name}.`);
-    } finally {
-      setDeletingBranchId(null);
-    }
-  };
-
-  const handleRuleCreate = async (event: React.FormEvent) => {
-    event.preventDefault();
-    setPageMessage(null);
-    setPageError(null);
-
-    const branchId = Number(ruleForm.branch_id);
-    if (!ruleForm.match_value.trim() || !branchId) {
-      setPageError('Rule keyword and target group are required.');
-      return;
-    }
-
-    try {
-      setRuleSaving(true);
-      const createdRule = await adminService.createAgentGroupRule({
-        match_value: ruleForm.match_value.trim(),
-        branch_id: branchId,
-      });
-      setAgentGroupRules((current) => [...current, createdRule].sort((a, b) => a.priority - b.priority || a.id - b.id));
-      setRuleForm({ match_value: '', branch_id: '' });
-      setPageMessage(`Created rule for keyword ${createdRule.match_value}.`);
-    } catch (error: any) {
-      setPageError(error.response?.data?.detail || 'Unable to create rule.');
-    } finally {
-      setRuleSaving(false);
-    }
-  };
-
-  const handleRuleDelete = async (rule: AgentGroupRule) => {
-    const confirmed = window.confirm(`Delete rule "${rule.match_value}" -> ${rule.branch_name}?`);
-    if (!confirmed) {
-      return;
-    }
-
-    setPageMessage(null);
-    setPageError(null);
-
-    try {
-      setDeletingRuleId(rule.id);
-      const response = await adminService.deleteAgentGroupRule(rule.id);
-      setAgentGroupRules((current) => current.filter((entry) => entry.id !== rule.id));
-      setPageMessage(response.message || 'Rule deleted.');
-    } catch (error: any) {
-      setPageError(error.response?.data?.detail || 'Unable to delete rule.');
-    } finally {
-      setDeletingRuleId(null);
-    }
-  };
-
   return (
     <div className="p-6 space-y-6">
       <div>
         <h1 className="text-3xl font-bold text-gray-900">Settings</h1>
         <p className="mt-2 text-sm text-gray-600">
-          Manage your password and, when permitted, update user roles and groups.
+          Manage your password and, when permitted, update user roles.
         </p>
       </div>
 
@@ -375,12 +245,6 @@ export default function AdminSettings() {
                 <div>
                   <p className="text-xs uppercase tracking-wide text-gray-500">Email</p>
                   <p className="mt-1 text-sm font-medium text-gray-900">{currentUser.email}</p>
-                </div>
-                <div>
-                  <p className="text-xs uppercase tracking-wide text-gray-500">Group</p>
-                  <p className="mt-1 text-sm font-medium text-gray-900">
-                    {getGroupLabel(currentUser)}
-                  </p>
                 </div>
               </div>
             </div>
@@ -436,8 +300,8 @@ export default function AdminSettings() {
                   <h2 className="text-lg font-semibold text-gray-900">User Management</h2>
                   <p className="mt-1 text-sm text-gray-600">
                     {isSuperAdmin
-                      ? 'Super admins can update roles and groups for every account.'
-                      : 'Admins can promote operators to admin and assign groups.'}
+                      ? 'Super admins can update roles for every account.'
+                      : 'Admins can promote operators to admin.'}
                   </p>
                 </div>
                 <div className="flex items-center gap-3">
@@ -517,17 +381,13 @@ export default function AdminSettings() {
                     <tr className="text-left text-xs uppercase tracking-wide text-gray-500">
                       <th className="pb-3 pr-4">User</th>
                       <th className="pb-3 pr-4">Current Role</th>
-                      <th className="pb-3 pr-4">Group</th>
                       <th className="pb-3 pr-4">Set Role</th>
-                      <th className="pb-3 pr-4">Set Group</th>
                       <th className="pb-3">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
                     {manageableUsers.map((user) => {
                       const draft = drafts[user.id];
-                      const effectiveRole = draft?.role || user.role;
-                      const groupLocked = effectiveRole === 'super_admin';
                       return (
                         <tr key={user.id} className="align-top">
                           <td className="py-4 pr-4">
@@ -535,9 +395,6 @@ export default function AdminSettings() {
                             <div className="text-xs text-gray-500">{user.email}</div>
                           </td>
                           <td className="py-4 pr-4 uppercase text-gray-700">{user.role}</td>
-                          <td className="py-4 pr-4 text-gray-700">
-                            {getGroupLabel(user)}
-                          </td>
                           <td className="py-4 pr-4">
                             <select
                               value={draft?.role || user.role}
@@ -547,21 +404,6 @@ export default function AdminSettings() {
                               {roleOptions.map((role) => (
                                 <option key={role} value={role}>
                                   {role}
-                                </option>
-                              ))}
-                            </select>
-                          </td>
-                          <td className="py-4 pr-4">
-                            <select
-                              value={groupLocked ? '' : (draft?.branch_id ?? '')}
-                              onChange={(event) => updateDraft(user.id, 'branch_id', event.target.value ? Number(event.target.value) : null)}
-                              disabled={groupLocked}
-                              className="w-full rounded-lg border border-gray-300 px-3 py-2 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-500"
-                            >
-                              <option value="">{groupLocked ? 'All' : 'Unassigned'}</option>
-                              {branches.map((branch) => (
-                                <option key={branch.id} value={branch.id}>
-                                  {branch.name}
                                 </option>
                               ))}
                             </select>
@@ -591,118 +433,6 @@ export default function AdminSettings() {
                     })}
                   </tbody>
                 </table>
-              </div>
-            </section>
-          ) : null}
-
-          {isSuperAdmin ? (
-            <section className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-gray-200">
-              <h2 className="text-lg font-semibold text-gray-900">Manage Groups</h2>
-              <p className="mt-1 text-sm text-gray-600">Create the groups that can be assigned to user accounts.</p>
-              <form onSubmit={handleBranchCreate} className="mt-5 grid gap-4 md:grid-cols-[1fr_1.4fr_auto]">
-                <input
-                  type="text"
-                  value={branchForm.name}
-                  onChange={(event) => setBranchForm((current) => ({ ...current, name: event.target.value }))}
-                  placeholder="Group name"
-                  className="rounded-lg border border-gray-300 px-3 py-2"
-                  required
-                />
-                <input
-                  type="text"
-                  value={branchForm.description}
-                  onChange={(event) => setBranchForm((current) => ({ ...current, description: event.target.value }))}
-                  placeholder="Description (optional)"
-                  className="rounded-lg border border-gray-300 px-3 py-2"
-                />
-                <button
-                  type="submit"
-                  disabled={branchSaving}
-                  className="rounded-lg bg-gray-900 px-4 py-2 text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:bg-gray-400"
-                >
-                  {branchSaving ? 'Creating...' : 'Create Group'}
-                </button>
-              </form>
-
-              <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                {branches.map((branch) => (
-                  <div key={branch.id} className="rounded-xl border border-gray-200 bg-gray-50 p-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <div className="font-medium text-gray-900">{branch.name}</div>
-                        <div className="mt-1 text-sm text-gray-600">{branch.description || 'No description provided.'}</div>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => handleBranchDelete(branch)}
-                        disabled={deletingBranchId === branch.id}
-                        className="rounded-lg bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-red-300"
-                      >
-                        {deletingBranchId === branch.id ? 'Deleting...' : 'Delete'}
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              <div className="mt-8 border-t border-gray-200 pt-6">
-                <h3 className="text-base font-semibold text-gray-900">Agent Group Rules</h3>
-                <p className="mt-1 text-sm text-gray-600">Automatically assign agents to groups when their name contains a keyword. Example: PHI -&gt; PHI group.</p>
-
-                <form onSubmit={handleRuleCreate} className="mt-4 grid gap-3 md:grid-cols-[1.2fr_1fr_auto]">
-                  <input
-                    type="text"
-                    value={ruleForm.match_value}
-                    onChange={(event) => setRuleForm((current) => ({ ...current, match_value: event.target.value }))}
-                    placeholder="Name contains (e.g. PHI)"
-                    className="rounded-lg border border-gray-300 px-3 py-2"
-                    required
-                  />
-                  <select
-                    value={ruleForm.branch_id}
-                    onChange={(event) => setRuleForm((current) => ({ ...current, branch_id: event.target.value }))}
-                    className="rounded-lg border border-gray-300 px-3 py-2"
-                    required
-                  >
-                    <option value="">Select target group</option>
-                    {branches.map((branch) => (
-                      <option key={branch.id} value={branch.id}>
-                        {branch.name}
-                      </option>
-                    ))}
-                  </select>
-                  <button
-                    type="submit"
-                    disabled={ruleSaving}
-                    className="rounded-lg bg-gray-900 px-4 py-2 text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:bg-gray-400"
-                  >
-                    {ruleSaving ? 'Adding...' : 'Add Rule'}
-                  </button>
-                </form>
-
-                <div className="mt-4 space-y-2">
-                  {agentGroupRules.length === 0 ? (
-                    <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-600">No rules yet. Add one to start automatic mapping.</div>
-                  ) : (
-                    agentGroupRules.map((rule) => (
-                      <div key={rule.id} className="flex items-center justify-between rounded-lg border border-gray-200 bg-white px-3 py-2">
-                        <div className="text-sm text-gray-800">
-                          <span className="font-medium">contains "{rule.match_value}"</span>
-                          <span className="text-gray-500"> -&gt; </span>
-                          <span className="font-medium">{rule.branch_name}</span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => handleRuleDelete(rule)}
-                          disabled={deletingRuleId === rule.id}
-                          className="rounded-lg bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-red-300"
-                        >
-                          {deletingRuleId === rule.id ? 'Deleting...' : 'Delete'}
-                        </button>
-                      </div>
-                    ))
-                  )}
-                </div>
               </div>
             </section>
           ) : null}

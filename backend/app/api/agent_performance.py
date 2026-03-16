@@ -3,7 +3,7 @@ Agent performance API routes.
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Set
 from collections import defaultdict
 
@@ -37,9 +37,9 @@ def parse_csv_list(value: Optional[str]) -> List[str]:
 def get_time_window(
     start: Optional[datetime],
     end: Optional[datetime],
-) -> (int, int):
+) -> tuple[int, int]:
     if not end:
-        end = datetime.utcnow()
+        end = datetime.now(timezone.utc)
     if not start:
         start = end - timedelta(days=7)
     start_epoch = int(start.timestamp())
@@ -74,31 +74,9 @@ def build_agent_name_map(db: Session, enabled_only: bool = True) -> Dict[str, st
 def get_accessible_agent_identifiers(db: Session, current_user: dict) -> Optional[Set[str]]:
     """Return allowed agent identifiers for the current user.
 
-    - super_admin: unrestricted (None)
-    - other roles with branch_id: only agents assigned to that branch
-    - other roles without branch_id: unrestricted for backward compatibility
+    Visibility restrictions were removed, so all authenticated users share the same scope.
     """
-    if current_user.get("role") == "super_admin":
-        return None
-
-    branch_id = current_user.get("branch_id")
-    if branch_id is None:
-        return None
-
-    agents = db.query(Agent).filter(Agent.branch_id == branch_id).all()
-    identifiers: Set[str] = set()
-
-    for agent in agents:
-        if agent.agent_uuid:
-            identifiers.add(agent.agent_uuid)
-        if agent.agent_name:
-            identifiers.add(agent.agent_name)
-        if agent.extension:
-            identifiers.add(agent.extension)
-        if agent.agent_contact:
-            identifiers.add(agent.agent_contact)
-
-    return identifiers
+    return None
 
 
 def apply_common_filters(
@@ -376,9 +354,6 @@ async def get_agent_performance_report(
     queue_ids = parse_csv_list(queues)
     agent_ids = parse_csv_list(agents)
     accessible_agent_ids = get_accessible_agent_identifiers(db, current_user)
-    visible_agents = []
-    if current_user.get("role") != "super_admin" and current_user.get("branch_id") is not None:
-        visible_agents = db.query(Agent).filter(Agent.branch_id == current_user.get("branch_id")).all()
 
     queue_lookup = build_queue_lookup(db, queue_ids)
     queue_extensions = list(queue_lookup.keys())
@@ -458,13 +433,6 @@ async def get_agent_performance_report(
 
     agents_payload = []
     agent_id_set = set(handled_calls.keys()) | set(missed_calls.keys())
-
-    # For group-scoped users, include visible agents even when they have zero activity
-    # in the selected time window (unless an explicit agent filter was requested).
-    if not agent_ids and visible_agents:
-        for agent in visible_agents:
-            if agent.agent_uuid:
-                agent_id_set.add(agent.agent_uuid)
 
     for agent_id in agent_id_set:
         handled_records = list(handled_calls.get(agent_id, {}).values())

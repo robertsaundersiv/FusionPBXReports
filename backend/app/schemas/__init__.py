@@ -58,7 +58,6 @@ class AgentResponse(BaseModel):
     agent_uuid: Optional[str] = None
     agent_name: str
     agent_contact: Optional[str] = None
-    branch_id: Optional[int] = None
     agent_enabled: Optional[bool] = True
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -72,7 +71,6 @@ class UserBase(BaseModel):
     username: str
     email: EmailStr
     role: str = "operator"  # super_admin, admin, operator
-    branch_id: Optional[int] = None
 
 
 class UserCreate(UserBase):
@@ -90,50 +88,14 @@ class UserResponse(UserBase):
         from_attributes = True
 
 
-class BranchResponse(BaseModel):
-    id: int
-    name: str
-    description: Optional[str]
-    created_at: datetime
-    updated_at: datetime
-
-    class Config:
-        from_attributes = True
-
-
 class UserUpdate(BaseModel):
     role: Optional[str] = None
-    branch_id: Optional[int] = None
     enabled: Optional[bool] = None
 
 
 class PasswordChangeRequest(BaseModel):
     current_password: str
     new_password: str
-
-
-class BranchCreate(BaseModel):
-    name: str
-    description: Optional[str] = None
-
-
-class AgentGroupRuleCreate(BaseModel):
-    match_value: str
-    branch_id: int
-    enabled: bool = True
-    priority: int = 100
-
-
-class AgentGroupRuleResponse(BaseModel):
-    id: int
-    match_value: str
-    branch_id: int
-    branch_name: str
-    enabled: bool
-    priority: int
-    created_at: datetime
-    updated_at: datetime
-
 
 # Dashboard KPI Schemas
 class KPIMetric(BaseModel):
@@ -227,43 +189,6 @@ class CallRecordResponse(BaseModel):
     hold_time: int
     mos: Optional[float]
     hangup_cause: Optional[str]
-
-
-class ScheduledReportBase(BaseModel):
-    name: str
-    description: Optional[str] = None
-    report_type: str
-    frequency: str
-    format: str = "pdf"
-
-
-class ScheduledReportCreate(ScheduledReportBase):
-    queue_ids: Optional[List[str]] = []
-    recipients_email: Optional[List[EmailStr]] = []
-
-
-class ScheduledReportResponse(ScheduledReportCreate):
-    id: int
-    enabled: bool
-    last_generated: Optional[datetime]
-    created_at: datetime
-
-    class Config:
-        from_attributes = True
-
-
-class MetricsAuditResponse(BaseModel):
-    """Metrics audit response for data verification"""
-    time_window_start: datetime
-    time_window_end: datetime
-    
-    total_records: int
-    sample_records: List[Dict]
-    
-    kpi_calculations: Dict[str, Dict]
-    
-    data_quality_score: float
-    warnings: List[str]
 
 
 class RepeatCallerEntry(BaseModel):

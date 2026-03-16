@@ -5,7 +5,7 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(__file__))
 
-from sqlalchemy import inspect, text
+from sqlalchemy import inspect
 from sqlalchemy.exc import ProgrammingError
 from app.database import SessionLocal, engine
 from app.models import User
@@ -16,49 +16,6 @@ def ensure_user_columns():
     insp = inspect(engine)
     if "users" not in insp.get_table_names():
         return
-    cols = [col["name"] for col in insp.get_columns("users")]
-    if "branch_id" not in cols:
-        with engine.begin() as conn:
-            conn.execute(text("ALTER TABLE users ADD COLUMN branch_id INTEGER"))
-
-    # create branches table if missing
-    if "branches" not in insp.get_table_names():
-        with engine.begin() as conn:
-            conn.execute(text(
-                """
-                CREATE TABLE IF NOT EXISTS branches (
-                    id SERIAL PRIMARY KEY,
-                    name VARCHAR(256) NOT NULL UNIQUE,
-                    description TEXT,
-                    created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT now(),
-                    updated_at TIMESTAMP WITHOUT TIME ZONE DEFAULT now()
-                )
-                """
-            ))
-
-    # add agent branch assignment column if missing
-    if "agents" in insp.get_table_names():
-        agent_cols = [col["name"] for col in insp.get_columns("agents")]
-        if "branch_id" not in agent_cols:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE agents ADD COLUMN branch_id INTEGER"))
-
-    # create agent group rules table if missing
-    if "agent_group_rules" not in insp.get_table_names():
-        with engine.begin() as conn:
-            conn.execute(text(
-                """
-                CREATE TABLE IF NOT EXISTS agent_group_rules (
-                    id SERIAL PRIMARY KEY,
-                    match_value VARCHAR(256) NOT NULL,
-                    branch_id INTEGER NOT NULL REFERENCES branches(id),
-                    enabled BOOLEAN DEFAULT TRUE,
-                    priority INTEGER DEFAULT 100,
-                    created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT now(),
-                    updated_at TIMESTAMP WITHOUT TIME ZONE DEFAULT now()
-                )
-                """
-            ))
 
 
 def _bcrypt_safe_password(password: str) -> str:
@@ -122,7 +79,6 @@ def seed_database():
     
     try:
         created_users = []
-        # Ensure DB schema has branch_id and branches table before we query user role
         try:
             ensure_user_columns()
         except ProgrammingError:

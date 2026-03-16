@@ -19,6 +19,7 @@ export interface KPIMetric {
   name: string;
   value: number;
   unit: string;
+  formattedValue?: string;
   threshold?: {
     good: number;
     warning: number;
@@ -87,29 +88,9 @@ export interface UserAccount {
   username: string;
   email: string;
   role: UserRole;
-  branch_id?: number | null;
   enabled: boolean;
   can_view_unmasked_numbers: boolean;
   created_at: string;
-}
-
-export interface Branch {
-  id: number;
-  name: string;
-  description?: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface AgentGroupRule {
-  id: number;
-  match_value: string;
-  branch_id: number;
-  branch_name: string;
-  enabled: boolean;
-  priority: number;
-  created_at: string;
-  updated_at: string;
 }
 
 export interface ExecutiveOverviewData {
@@ -142,6 +123,30 @@ export interface ExecutiveOverviewData {
     worstAsaQueues: Array<{ name: string; asa: number }>;
     lowestMosProviders: Array<{ name: string; mos: number }>;
   };
+}
+
+export interface QualityHealthTaskStatus {
+  task_name: string;
+  display_name: string;
+  schedule: string;
+  last_executed_at: string | null;
+  status: string;
+  source: string;
+}
+
+export interface QualityHealthData {
+  pipeline_status: {
+    status: string;
+    last_successful_run: string | null;
+    last_ingested_insert_date: string | null;
+    last_queue_sync: string | null;
+    last_agent_sync: string | null;
+    last_hourly_agg: string | null;
+    last_daily_agg: string | null;
+    error_message: string | null;
+    error_count: number;
+  };
+  tasks: QualityHealthTaskStatus[];
 }
 
 export interface HeatmapDataPoint {

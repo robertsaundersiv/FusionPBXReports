@@ -10,6 +10,10 @@ interface KPICardProps {
 export default function KPICard({ metric, onDefinitionClick }: KPICardProps) {
   const isNegativeTrend = metric.unit === '%' && (metric.name.includes('Abandon') || metric.name.includes('Bad'));
   const isTrendPositive = !isNegativeTrend ? (metric.trend ?? 0) > 0 : (metric.trend ?? 0) < 0;
+  const metricDisplayValue = metric.formattedValue
+    ?? (typeof metric.value === 'number' && metric.value >= 1000
+      ? numberUtils.abbreviateNumber(metric.value)
+      : metric.value.toFixed(metric.unit === '%' ? 1 : 0));
 
   const getThresholdColor = () => {
     if (!metric.threshold) return 'text-gray-700';
@@ -24,10 +28,8 @@ export default function KPICard({ metric, onDefinitionClick }: KPICardProps) {
         <div>
           <p className="text-sm text-gray-600">{metric.name}</p>
           <p className={`text-3xl font-bold ${getThresholdColor()}`}>
-            {typeof metric.value === 'number' && metric.value >= 1000
-              ? numberUtils.abbreviateNumber(metric.value)
-              : metric.value.toFixed(metric.unit === '%' ? 1 : 0)}{' '}
-            <span className="text-lg text-gray-500">{metric.unit}</span>
+            {metricDisplayValue}
+            {metric.unit ? <span className="text-lg text-gray-500"> {metric.unit}</span> : null}
           </p>
         </div>
         <button

@@ -7,7 +7,6 @@ from app.tasks.etl import (
     sync_agent_metadata,
     compute_hourly_aggregates,
     compute_daily_aggregates,
-    generate_scheduled_reports,
 )
 from app.tasks.extensions import (
     sync_extensions,
@@ -19,6 +18,5 @@ __all__ = [
     "sync_agent_metadata",
     "compute_hourly_aggregates",
     "compute_daily_aggregates",
-    "generate_scheduled_reports",
     "sync_extensions",
 ]

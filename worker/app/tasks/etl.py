@@ -460,26 +460,6 @@ def compute_daily_aggregates():
         return {"status": "error", "message": str(e)}
 
 
-@celery_app.task(name="app.tasks.generate_scheduled_reports")
-def generate_scheduled_reports():
-    """
-    Periodic task: Generate scheduled reports
-    Runs at configured times
-    """
-    logger.info("Starting scheduled report generation")
-    try:
-        # TODO: Implement report generation logic
-        # 1. Query ScheduledReport table for reports to generate
-        # 2. Fetch data for each report
-        # 3. Generate PDF/CSV
-        # 4. Send via email/Slack
-        logger.info("Report generation completed successfully")
-        return {"status": "success", "reports_generated": 0}
-    except Exception as e:
-        logger.error(f"Error in report generation: {e}")
-        return {"status": "error", "message": str(e)}
-
-
 # Beat schedule configuration
 from celery.schedules import crontab
 
@@ -509,9 +489,5 @@ celery_app.conf.beat_schedule.update({
     'compute-daily-aggregates': {
         'task': 'app.tasks.compute_daily_aggregates',
         'schedule': crontab(hour=2, minute=0),
-    },
-    'generate-scheduled-reports': {
-        'task': 'app.tasks.generate_scheduled_reports',
-        'schedule': crontab(hour=3, minute=0),
     },
 })

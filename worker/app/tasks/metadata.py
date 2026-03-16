@@ -3,8 +3,7 @@ Metadata sync tasks (queues and agents)
 """
 import logging
 import asyncio
-from datetime import datetime
-from celery import shared_task
+from datetime import datetime, timezone
 
 from app.celery_app import celery_app
 from app.clients.fusionpbx import FusionPBXClient
@@ -43,13 +42,16 @@ async def _sync_metadata_from_api() -> dict:
         'agents': {'created': 0, 'updated': 0, 'skipped': 0, 'total': 0}
     }
 
+    client = FusionPBXClient()
+    await client.initialize()
+
     try:
         # Sync queues first
-        queue_stats = await _sync_queues()
+        queue_stats = await _sync_queues(client)
         stats['queues'] = queue_stats
 
         # Then sync agents
-        agent_stats = await _sync_agents()
+        agent_stats = await _sync_agents(client)
         stats['agents'] = agent_stats
 
         return {
@@ -64,16 +66,16 @@ async def _sync_metadata_from_api() -> dict:
             "message": str(e),
             "stats": stats
         }
+    finally:
+        await client.close()
 
 
-async def _sync_queues() -> dict:
+async def _sync_queues(client: FusionPBXClient) -> dict:
     """Sync queues from FusionPBX"""
     logger.info("Syncing queues from FusionPBX")
 
-    client = FusionPBXClient()
-    await client.initialize()
-
     stats = {'created': 0, 'updated': 0, 'skipped': 0, 'total': 0}
+    db = None
 
     try:
         queues = await client.get_call_center_queues()
@@ -112,8 +114,8 @@ async def _sync_queues() -> dict:
                     'name': queue_name,
                     'queue_extension': queue_data.get('queue_extension'),
                     'description': queue_data.get('queue_description'),
-                    'enabled': queue_data.get('queue_enabled', True),
-                    'last_synced': datetime.utcnow()
+                    'enabled': bool(queue_data.get('queue_enabled', True)),
+                    'last_synced': datetime.now(timezone.utc)
                 }
                 
                 if existing:
@@ -134,21 +136,23 @@ async def _sync_queues() -> dict:
         db.commit()
         logger.info(f"Queue sync completed: {stats}")
 
+    except Exception:
+        if db:
+            db.rollback()
+        raise
     finally:
-        await client.close()
-        db.close()
+        if db:
+            db.close()
 
     return stats
 
 
-async def _sync_agents() -> dict:
+async def _sync_agents(client: FusionPBXClient) -> dict:
     """Sync agents from FusionPBX"""
     logger.info("Syncing agents from FusionPBX")
 
-    client = FusionPBXClient()
-    await client.initialize()
-
     stats = {'created': 0, 'updated': 0, 'skipped': 0, 'total': 0}
+    db = None
 
     try:
         agents = await client.get_call_center_agents()
@@ -172,6 +176,7 @@ async def _sync_agents() -> dict:
                 agent_name = agent_data.get('agent_name')
                 
                 if not agent_uuid or not agent_name:
+                    logger.warning(f"Skipping agent (missing uuid or name): {agent_data}")
                     stats['skipped'] += 1
                     continue
                 
@@ -186,8 +191,8 @@ async def _sync_agents() -> dict:
                     'agent_name': agent_name,
                     'agent_contact': agent_data.get('agent_contact'),
                     'extension': agent_data.get('agent_extension'),
-                    'enabled': agent_data.get('agent_enabled', True),
-                    'last_synced': datetime.utcnow()
+                    'enabled': bool(agent_data.get('agent_enabled', True)),
+                    'last_synced': datetime.now(timezone.utc)
                 }
                 
                 if existing:
@@ -208,8 +213,12 @@ async def _sync_agents() -> dict:
         db.commit()
         logger.info(f"Agent sync completed: {stats}")
 
+    except Exception:
+        if db:
+            db.rollback()
+        raise
     finally:
-        await client.close()
-        db.close()
+        if db:
+            db.close()
 
     return stats

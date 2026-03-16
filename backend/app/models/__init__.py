@@ -16,11 +16,9 @@ __all__ = [
     "HourlyAggregate",
     "DailyAggregate",
     "User",
-    "ScheduledReport",
     "ETLPipelineStatus",
     "OperationalNote",
     "Extension",
-    "AgentGroupRule",
 ]
 
 
@@ -205,8 +203,6 @@ class Agent(Base):
     # User mapping
     user_uuid = Column(String(36))
     extension = Column(String(50))
-    branch_id = Column(Integer, ForeignKey("branches.id"), nullable=True)
-    branch = relationship("Branch", backref="agents")
     
     enabled = Column(Boolean, default=True)
     
@@ -314,35 +310,6 @@ class DailyAggregate(Base):
         UniqueConstraint('date', 'queue_id', 'agent_uuid', name='uq_daily_date_queue_agent'),
     )
 
-
-class Branch(Base):
-    """Branch locations for users"""
-    __tablename__ = "branches"
-
-    id = Column(Integer, primary_key=True)
-    name = Column(String(256), unique=True, nullable=False)
-    description = Column(Text, nullable=True)
-
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-
-class AgentGroupRule(Base):
-    """Rule-based mapping from agent name patterns to groups"""
-    __tablename__ = "agent_group_rules"
-
-    id = Column(Integer, primary_key=True)
-    match_value = Column(String(256), nullable=False)
-    branch_id = Column(Integer, ForeignKey("branches.id"), nullable=False)
-    enabled = Column(Boolean, default=True)
-    priority = Column(Integer, default=100)
-
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-    branch = relationship("Branch", backref="agent_group_rules")
-
-
 class User(Base):
     """Users (super_admin, admin, operator)"""
     __tablename__ = "users"
@@ -356,9 +323,6 @@ class User(Base):
     role = Column(String(50), default="operator")  # super_admin, admin, operator
     
     enabled = Column(Boolean, default=True)
-
-    branch_id = Column(Integer, ForeignKey("branches.id"), nullable=True)
-    branch = relationship("Branch", backref="users")
     
     # Permissions
     can_view_unmasked_numbers = Column(Boolean, default=False)
@@ -367,39 +331,6 @@ class User(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     last_login = Column(DateTime)
-
-
-class ScheduledReport(Base):
-    """Scheduled report configuration"""
-    __tablename__ = "scheduled_reports"
-    
-    id = Column(Integer, primary_key=True)
-    name = Column(String(256), nullable=False)
-    description = Column(Text)
-    
-    # Report type
-    report_type = Column(String(50))  # daily_ops, weekly_pack, monthly_summary, sla_compliance
-    
-    # Schedule
-    schedule = Column(String(50))  # cron expression
-    frequency = Column(String(50))  # daily, weekly, monthly
-    
-    # Filters
-    queue_ids = Column(ARRAY(String))
-    include_all_queues = Column(Boolean, default=False)
-    
-    # Output
-    format = Column(String(50), default="pdf")  # pdf, csv, json
-    recipients_email = Column(ARRAY(String), default=[])
-    slack_webhook = Column(String(512))
-    
-    # Status
-    enabled = Column(Boolean, default=True)
-    
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    last_generated = Column(DateTime)
-
 
 class ETLPipelineStatus(Base):
     """Track ETL pipeline execution"""

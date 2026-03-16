@@ -18,7 +18,6 @@ __all__ = [
     "HourlyAggregate",
     "DailyAggregate",
     "User",
-    "ScheduledReport",
     "ETLPipelineStatus",
     "OperationalNote",
     "Extension",
@@ -335,39 +334,6 @@ class User(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     last_login = Column(DateTime)
-
-
-class ScheduledReport(Base):
-    """Scheduled report configuration"""
-    __tablename__ = "scheduled_reports"
-    
-    id = Column(Integer, primary_key=True)
-    name = Column(String(256), nullable=False)
-    description = Column(Text)
-    
-    # Report type
-    report_type = Column(String(50))  # daily_ops, weekly_pack, monthly_summary, sla_compliance
-    
-    # Schedule
-    schedule = Column(String(50))  # cron expression
-    frequency = Column(String(50))  # daily, weekly, monthly
-    
-    # Filters
-    queue_ids = Column(ARRAY(String))
-    include_all_queues = Column(Boolean, default=False)
-    
-    # Output
-    format = Column(String(50), default="pdf")  # pdf, csv, json
-    recipients_email = Column(ARRAY(String), default=[])
-    slack_webhook = Column(String(512))
-    
-    # Status
-    enabled = Column(Boolean, default=True)
-    
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    last_generated = Column(DateTime)
-
 
 class ETLPipelineStatus(Base):
     """Track ETL pipeline execution"""

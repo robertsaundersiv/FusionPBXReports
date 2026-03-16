@@ -1,37 +1,16 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { Menu, X, LogOut } from 'lucide-react';
-import { authService } from '../services/auth';
 import type { UserAccount } from '../types';
 
 interface LayoutProps {
   children: React.ReactNode;
+  currentUser: UserAccount | null;
 }
 
-export default function Layout({ children }: LayoutProps) {
+export default function Layout({ children, currentUser }: LayoutProps) {
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [currentUser, setCurrentUser] = useState<UserAccount | null>(null);
   const location = useLocation();
-
-  useEffect(() => {
-    let mounted = true;
-
-    authService.getMe()
-      .then((user) => {
-        if (mounted) {
-          setCurrentUser(user);
-        }
-      })
-      .catch(() => {
-        if (mounted) {
-          setCurrentUser(null);
-        }
-      });
-
-    return () => {
-      mounted = false;
-    };
-  }, []);
 
   const handleLogout = () => {
     localStorage.removeItem('auth_token');
@@ -45,13 +24,11 @@ export default function Layout({ children }: LayoutProps) {
     { name: 'Agent Performance', href: '/agent-performance' },
     { name: 'Agent Performance Report', href: '/agent-performance-report' },
     { name: 'Outbound Calls', href: '/outbound-calls' },
-    { name: 'Quality & Health', href: '/quality-health' },
-    { name: 'Repeat Callers', href: '/repeat-callers' },
-    { name: 'Scheduled Reports', href: '/scheduled-reports' },
-    { name: 'Settings', href: '/admin/settings' },
-    ...(currentUser && currentUser.role !== 'operator'
-      ? [{ name: 'Metrics Audit', href: '/admin/metrics-audit' }]
+    ...(currentUser?.role === 'super_admin'
+      ? [{ name: 'Quality & Health', href: '/quality-health' }]
       : []),
+    { name: 'Repeat Callers', href: '/repeat-callers' },
+    { name: 'Settings', href: '/admin/settings' },
   ];
 
   return (

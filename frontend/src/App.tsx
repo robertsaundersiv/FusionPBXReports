@@ -2,6 +2,8 @@ import React, { Suspense, useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import Layout from './components/Layout';
 import Login from './pages/Login';
+import { authService } from './services/auth';
+import type { UserAccount } from './types';
 import './index.css';
 
 // Pages with lazy loading
@@ -13,17 +15,40 @@ const AgentPerformanceReport = React.lazy(() => import('./pages/AgentPerformance
 const OutboundCalls = React.lazy(() => import('./pages/OutboundCalls'));
 const QualityHealth = React.lazy(() => import('./pages/QualityHealth'));
 const RepeatCallers = React.lazy(() => import('./pages/RepeatCallers'));
-const ScheduledReports = React.lazy(() => import('./pages/ScheduledReports'));
 const AdminSettings = React.lazy(() => import('./pages/AdminSettings'));
-const MetricsAudit = React.lazy(() => import('./pages/MetricsAudit'));
 
 function App() {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [authLoading, setAuthLoading] = useState<boolean>(true);
+  const [currentUser, setCurrentUser] = useState<UserAccount | null>(null);
 
   useEffect(() => {
     const token = localStorage.getItem('auth_token');
-    setIsAuthenticated(!!token);
+    if (!token) {
+      setIsAuthenticated(false);
+      setCurrentUser(null);
+      setAuthLoading(false);
+      return;
+    }
+
+    authService.getMe()
+      .then((user) => {
+        setCurrentUser(user);
+        setIsAuthenticated(true);
+      })
+      .catch(() => {
+        localStorage.removeItem('auth_token');
+        setCurrentUser(null);
+        setIsAuthenticated(false);
+      })
+      .finally(() => {
+        setAuthLoading(false);
+      });
   }, []);
+
+  if (authLoading) {
+    return <div className="p-8 text-center">Loading...</div>;
+  }
 
   if (!isAuthenticated) {
     return (
@@ -38,7 +63,7 @@ function App() {
 
   return (
     <Router>
-      <Layout>
+      <Layout currentUser={currentUser}>
         <Suspense fallback={<div className="p-8 text-center">Loading...</div>}>
           <Routes>
             <Route path="/" element={<Navigate to="/executive-overview" replace />} />
@@ -49,11 +74,12 @@ function App() {
             <Route path="/agent-performance/:agentId" element={<AgentPerformance />} />
             <Route path="/agent-performance-report" element={<AgentPerformanceReport />} />
             <Route path="/outbound-calls" element={<OutboundCalls />} />
-            <Route path="/quality-health" element={<QualityHealth />} />
+            <Route
+              path="/quality-health"
+              element={currentUser?.role === 'super_admin' ? <QualityHealth /> : <Navigate to="/executive-overview" replace />}
+            />
             <Route path="/repeat-callers" element={<RepeatCallers />} />
-            <Route path="/scheduled-reports" element={<ScheduledReports />} />
             <Route path="/admin/settings" element={<AdminSettings />} />
-            <Route path="/admin/metrics-audit" element={<MetricsAudit />} />
             <Route path="*" element={<Navigate to="/executive-overview" replace />} />
           </Routes>
         </Suspense>

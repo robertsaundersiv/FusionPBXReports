@@ -1,141 +1,157 @@
-"""
-API routes for admin operations
-"""
+"""API routes for admin and operational settings."""
+import json
+import os
+from datetime import datetime
+
+import redis
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 from app.database import get_db
-from app.models import Queue, Agent, User, Branch, AgentGroupRule, ScheduledReport, ETLPipelineStatus, OperationalNote
+from app.models import Queue, Agent, User, ETLPipelineStatus, OperationalNote, Extension
 from app.auth import get_current_admin, get_current_super_admin, _validate_role
-from app.schemas import QueueResponse, AgentResponse, UserResponse, ScheduledReportResponse, BranchResponse, BranchCreate, UserUpdate, AgentGroupRuleCreate, AgentGroupRuleResponse
+from app.schemas import QueueResponse, AgentResponse, UserResponse, UserUpdate
 from typing import List
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 
 
-# Queue Management
-@router.get("/branches", response_model=List[BranchResponse])
-async def get_branches(
-    current_user: dict = Depends(get_current_admin),
-    db: Session = Depends(get_db),
-):
-    """Get all branches"""
-    branches = db.query(Branch).order_by(Branch.name).all()
-    return branches
+TASK_METADATA = {
+    "app.tasks.sync_extensions": {
+        "display_name": "Sync Extensions",
+        "schedule": "Every 15 minutes",
+    },
+    "app.tasks.ingest_cdr_records": {
+        "display_name": "Ingest CDR Records",
+        "schedule": "Every 15 minutes",
+    },
+    "app.tasks.cleanup_old_cdr_records": {
+        "display_name": "Cleanup Old CDR Records",
+        "schedule": "Every 15 minutes",
+    },
+    "app.tasks.sync_metadata": {
+        "display_name": "Sync Metadata",
+        "schedule": "Every 4 hours",
+    },
+    "app.tasks.compute_hourly_aggregates": {
+        "display_name": "Compute Hourly Aggregates",
+        "schedule": "Every 15 minutes",
+    },
+    "app.tasks.compute_daily_aggregates": {
+        "display_name": "Compute Daily Aggregates",
+        "schedule": "Daily at 2:00 AM UTC",
+    },
+}
 
 
-@router.post("/branches", response_model=BranchResponse)
-async def create_branch(
-    branch_data: BranchCreate,
-    current_user: dict = Depends(get_current_super_admin),
-    db: Session = Depends(get_db),
-):
-    """Create branch (super_admin only)"""
-    existing_branch = db.query(Branch).filter(Branch.name == branch_data.name).first()
-    if existing_branch:
-        raise HTTPException(status_code=400, detail="Branch already exists")
-
-    new_branch = Branch(**branch_data.model_dump())
-    db.add(new_branch)
-    db.commit()
-    db.refresh(new_branch)
-    return new_branch
+def _parse_result_timestamp(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    normalized = value.replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
 
 
-@router.delete("/branches/{branch_id}")
-async def delete_branch(
-    branch_id: int,
-    current_user: dict = Depends(get_current_super_admin),
-    db: Session = Depends(get_db),
-):
-    """Delete branch/group (super_admin only)"""
-    branch = db.query(Branch).filter(Branch.id == branch_id).first()
-    if not branch:
-        raise HTTPException(status_code=404, detail="Branch not found")
+def _infer_celery_task_name(result_payload: object) -> str | None:
+    if not isinstance(result_payload, dict):
+        return None
 
-    # Reassign all users in this group to unassigned before delete.
-    db.query(User).filter(User.branch_id == branch_id).update(
-        {"branch_id": None}, synchronize_session=False
-    )
-
-    db.delete(branch)
-    db.commit()
-    return {"message": "Group deleted"}
-
-
-@router.get("/agent-group-rules", response_model=List[AgentGroupRuleResponse])
-async def get_agent_group_rules(
-    current_user: dict = Depends(get_current_super_admin),
-    db: Session = Depends(get_db),
-):
-    """Get all agent group mapping rules (super_admin only)"""
-    rules = db.query(AgentGroupRule).order_by(AgentGroupRule.priority.asc(), AgentGroupRule.id.asc()).all()
-    return [
-        {
-            "id": rule.id,
-            "match_value": rule.match_value,
-            "branch_id": rule.branch_id,
-            "branch_name": rule.branch.name if rule.branch else "Unknown",
-            "enabled": rule.enabled,
-            "priority": rule.priority,
-            "created_at": rule.created_at,
-            "updated_at": rule.updated_at,
-        }
-        for rule in rules
-    ]
+    keys = set(result_payload.keys())
+    if {"created", "updated", "failed", "total"}.issubset(keys):
+        return "app.tasks.sync_extensions"
+    if {"records_synced", "records_skipped", "total_fetched"}.issubset(keys):
+        return "app.tasks.ingest_cdr_records"
+    if {"records_deleted", "retention_days"}.issubset(keys):
+        return "app.tasks.cleanup_old_cdr_records"
+    if "stats" in result_payload:
+        stats = result_payload.get("stats")
+        if isinstance(stats, dict) and {"queues", "agents"}.issubset(stats.keys()):
+            return "app.tasks.sync_metadata"
+    if "hours_processed" in result_payload:
+        return "app.tasks.compute_hourly_aggregates"
+    if "days_processed" in result_payload:
+        return "app.tasks.compute_daily_aggregates"
+    return None
 
 
-@router.post("/agent-group-rules", response_model=AgentGroupRuleResponse)
-async def create_agent_group_rule(
-    payload: AgentGroupRuleCreate,
-    current_user: dict = Depends(get_current_super_admin),
-    db: Session = Depends(get_db),
-):
-    """Create an agent group mapping rule (super_admin only)"""
-    match_value = payload.match_value.strip()
-    if not match_value:
-        raise HTTPException(status_code=400, detail="Match value is required")
+def _load_celery_result_timestamps() -> dict[str, dict]:
+    redis_url = os.getenv("REDIS_URL")
+    if not redis_url:
+        return {}
 
-    branch = db.query(Branch).filter(Branch.id == payload.branch_id).first()
-    if not branch:
-        raise HTTPException(status_code=404, detail="Branch not found")
+    try:
+        client = redis.Redis.from_url(redis_url, decode_responses=True)
+        latest_results: dict[str, dict] = {}
 
-    rule = AgentGroupRule(
-        match_value=match_value,
-        branch_id=payload.branch_id,
-        enabled=payload.enabled,
-        priority=payload.priority,
-    )
-    db.add(rule)
-    db.commit()
-    db.refresh(rule)
+        for key in client.scan_iter(match="celery-task-meta-*", count=200):
+            raw_value = client.get(key)
+            if not raw_value:
+                continue
 
-    return {
-        "id": rule.id,
-        "match_value": rule.match_value,
-        "branch_id": rule.branch_id,
-        "branch_name": branch.name,
-        "enabled": rule.enabled,
-        "priority": rule.priority,
-        "created_at": rule.created_at,
-        "updated_at": rule.updated_at,
+            try:
+                payload = json.loads(raw_value)
+            except json.JSONDecodeError:
+                continue
+
+            task_name = _infer_celery_task_name(payload.get("result"))
+            if not task_name:
+                continue
+
+            completed_at = _parse_result_timestamp(payload.get("date_done"))
+            if not completed_at:
+                continue
+
+            existing = latest_results.get(task_name)
+            if existing is None or completed_at > existing["last_executed_at"]:
+                latest_results[task_name] = {
+                    "last_executed_at": completed_at,
+                    "status": payload.get("status", "UNKNOWN"),
+                    "source": "celery_result_backend",
+                }
+
+        return latest_results
+    except redis.RedisError:
+        return {}
+
+
+def _load_quality_health_task_status(db: Session) -> list[dict]:
+    celery_results = _load_celery_result_timestamps()
+    etl_status = db.query(ETLPipelineStatus).first()
+
+    extension_sync_at = db.query(func.max(Extension.last_synced)).scalar()
+    queue_sync_at = db.query(func.max(Queue.last_synced)).scalar()
+    agent_sync_at = db.query(func.max(Agent.last_synced)).scalar()
+
+    fallback_timestamps = {
+        "app.tasks.sync_extensions": extension_sync_at,
+        "app.tasks.ingest_cdr_records": etl_status.last_successful_run if etl_status else None,
+        "app.tasks.cleanup_old_cdr_records": None,
+        "app.tasks.sync_metadata": max(
+            [value for value in (queue_sync_at, agent_sync_at) if value is not None],
+            default=None,
+        ),
+        "app.tasks.compute_hourly_aggregates": etl_status.last_hourly_agg if etl_status else None,
+        "app.tasks.compute_daily_aggregates": etl_status.last_daily_agg if etl_status else None,
     }
 
+    task_status = []
+    for task_name, metadata in TASK_METADATA.items():
+        celery_result = celery_results.get(task_name)
+        fallback_timestamp = fallback_timestamps.get(task_name)
+        task_status.append(
+            {
+                "task_name": task_name,
+                "display_name": metadata["display_name"],
+                "schedule": metadata["schedule"],
+                "last_executed_at": celery_result["last_executed_at"] if celery_result else fallback_timestamp,
+                "status": celery_result["status"] if celery_result else ("UNAVAILABLE" if fallback_timestamp is None else "SUCCESS"),
+                "source": celery_result["source"] if celery_result else ("database_metadata" if fallback_timestamp else "untracked"),
+            }
+        )
 
-@router.delete("/agent-group-rules/{rule_id}")
-async def delete_agent_group_rule(
-    rule_id: int,
-    current_user: dict = Depends(get_current_super_admin),
-    db: Session = Depends(get_db),
-):
-    """Delete an agent group mapping rule (super_admin only)"""
-    rule = db.query(AgentGroupRule).filter(AgentGroupRule.id == rule_id).first()
-    if not rule:
-        raise HTTPException(status_code=404, detail="Rule not found")
-
-    db.delete(rule)
-    db.commit()
-    return {"message": "Rule deleted"}
+    return task_status
 
 
 @router.get("/queues", response_model=List[QueueResponse])
@@ -189,12 +205,7 @@ async def get_agents(
     db: Session = Depends(get_db),
 ):
     """Get all agents"""
-    query = db.query(Agent)
-
-    if current_user.get("role") != "super_admin" and current_user.get("branch_id") is not None:
-        query = query.filter(Agent.branch_id == current_user.get("branch_id"))
-
-    agents = query.order_by(Agent.agent_name).all()
+    agents = db.query(Agent).order_by(Agent.agent_name).all()
     return agents
 
 
@@ -277,16 +288,6 @@ async def update_user(
             detail="Admin can only set operator or admin roles",
         )
 
-    if user.role == "super_admin" and update_data.get("branch_id") is not None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Super admin group is fixed to All",
-        )
-
-    # Super admins always belong to the immutable "All" group (branch_id = None).
-    if user.role == "super_admin" or requested_role == "super_admin":
-        update_data["branch_id"] = None
-
     # Prevent removing the final enabled super admin via disable or role change.
     if user.role == "super_admin":
         will_disable = update_data.get("enabled") is False
@@ -302,11 +303,6 @@ async def update_user(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Cannot disable or demote the last enabled super admin",
                 )
-
-    if "branch_id" in update_data and update_data["branch_id"] is not None:
-        branch = db.query(Branch).filter(Branch.id == update_data["branch_id"]).first()
-        if not branch:
-            raise HTTPException(status_code=404, detail="Branch not found")
 
     for key, value in update_data.items():
         if hasattr(user, key):
@@ -361,31 +357,6 @@ async def delete_user(
     db.commit()
     return {"message": "User deleted"}
 
-# Scheduled Reports
-@router.get("/scheduled-reports", response_model=List[ScheduledReportResponse])
-async def get_scheduled_reports(
-    current_user: dict = Depends(get_current_admin),
-    db: Session = Depends(get_db),
-):
-    """Get scheduled reports"""
-    reports = db.query(ScheduledReport).filter(ScheduledReport.enabled == True).all()
-    return reports
-
-
-@router.post("/scheduled-reports", response_model=ScheduledReportResponse)
-async def create_scheduled_report(
-    report: dict,
-    current_user: dict = Depends(get_current_admin),
-    db: Session = Depends(get_db),
-):
-    """Create scheduled report"""
-    new_report = ScheduledReport(**report)
-    db.add(new_report)
-    db.commit()
-    db.refresh(new_report)
-    return new_report
-
-
 # ETL Status
 @router.get("/etl-status")
 async def get_etl_status(
@@ -411,6 +382,31 @@ async def get_etl_status(
         "last_daily_agg": status.last_daily_agg,
         "error_message": status.error_message,
         "error_count": status.error_count,
+    }
+
+
+@router.get("/quality-health")
+async def get_quality_health(
+    current_user: dict = Depends(get_current_super_admin),
+    db: Session = Depends(get_db),
+):
+    """Get super-admin quality and worker task health details."""
+    etl_status = db.query(ETLPipelineStatus).first()
+    task_status = _load_quality_health_task_status(db)
+
+    return {
+        "pipeline_status": {
+            "status": etl_status.status if etl_status else "idle",
+            "last_successful_run": etl_status.last_successful_run if etl_status else None,
+            "last_ingested_insert_date": etl_status.last_ingested_insert_date if etl_status else None,
+            "last_queue_sync": etl_status.last_queue_sync if etl_status else None,
+            "last_agent_sync": etl_status.last_agent_sync if etl_status else None,
+            "last_hourly_agg": etl_status.last_hourly_agg if etl_status else None,
+            "last_daily_agg": etl_status.last_daily_agg if etl_status else None,
+            "error_message": etl_status.error_message if etl_status else None,
+            "error_count": etl_status.error_count if etl_status else 0,
+        },
+        "tasks": task_status,
     }
 
 
@@ -440,40 +436,3 @@ async def get_operational_notes(
     """Get operational notes"""
     notes = db.query(OperationalNote).order_by(OperationalNote.note_date.desc()).all()
     return notes
-
-
-# Metrics Audit
-@router.get("/metrics-audit")
-async def get_metrics_audit(
-    current_user: dict = Depends(get_current_admin),
-    db: Session = Depends(get_db),
-):
-    """Get metrics audit data"""
-    # Get last hour of CDR data
-    from datetime import timedelta
-    from sqlalchemy import func
-    from app.models import CDRRecord
-    
-    one_hour_ago = __import__("datetime").datetime.utcnow() - timedelta(hours=1)
-    start_epoch = int(one_hour_ago.timestamp())
-    
-    records = db.query(CDRRecord).filter(
-        CDRRecord.start_epoch >= start_epoch
-    ).all()
-    
-    # Calculate audit metrics
-    audit_data = {
-        'time_window_start': one_hour_ago,
-        'time_window_end': __import__("datetime").datetime.utcnow(),
-        'total_records': len(records),
-        'sample_records': [{'id': r.id, 'uuid': r.xml_cdr_uuid} for r in records[:10]],
-        'kpi_calculations': {
-            'total_offered': sum(1 for r in records if r.cc_queue_joined_epoch),
-            'total_answered': sum(1 for r in records if r.status == 'answered'),
-            'total_abandoned': sum(1 for r in records if r.cc_queue_joined_epoch and not r.cc_queue_answered_epoch),
-        },
-        'data_quality_score': 95.0,
-        'warnings': [],
-    }
-    
-    return audit_data

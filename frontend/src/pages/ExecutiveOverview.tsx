@@ -14,6 +14,26 @@ function formatHourBucketLabel(value: string) {
   return `${displayHour}${suffix[0]}`;
 }
 
+function formatDurationLabel(totalSeconds: number) {
+  const normalizedSeconds = Math.max(0, Math.floor(totalSeconds));
+  const hours = Math.floor(normalizedSeconds / 3600);
+  const minutes = Math.floor((normalizedSeconds % 3600) / 60);
+  const seconds = normalizedSeconds % 60;
+  const parts = [];
+
+  if (hours > 0) {
+    parts.push(`${hours} hour${hours === 1 ? '' : 's'}`);
+  }
+  if (minutes > 0) {
+    parts.push(`${minutes} minute${minutes === 1 ? '' : 's'}`);
+  }
+  if (seconds > 0 || parts.length === 0) {
+    parts.push(`${seconds} second${seconds === 1 ? '' : 's'}`);
+  }
+
+  return parts.join(', ');
+}
+
 export default function ExecutiveOverview() {
   const { filters, updateDateRange, updateQueueIds, updateDirection } = useFilterStore();
   const [data, setData] = useState<ExecutiveOverviewData | null>(null);
@@ -67,6 +87,11 @@ export default function ExecutiveOverview() {
 
   const weekdayBuckets = data.trends.callVolumeBuckets?.byDayOfWeek ?? [];
   const hourBuckets = data.trends.callVolumeBuckets?.byHourOfDay ?? [];
+  const totalTalkTimeMetric: KPIMetric = {
+    ...data.totalTalkTime,
+    formattedValue: formatDurationLabel(data.totalTalkTime.value),
+    unit: '',
+  };
 
   return (
     <div className="overflow-auto">
@@ -95,7 +120,7 @@ export default function ExecutiveOverview() {
           <KPICard metric={data.asa} onDefinitionClick={() => setSelectedDefinition(data.asa)} />
           <KPICard metric={data.aht} onDefinitionClick={() => setSelectedDefinition(data.aht)} />
           <KPICard metric={data.avgMos} onDefinitionClick={() => setSelectedDefinition(data.avgMos)} />
-          <KPICard metric={data.totalTalkTime} onDefinitionClick={() => setSelectedDefinition(data.totalTalkTime)} />
+          <KPICard metric={totalTalkTimeMetric} onDefinitionClick={() => setSelectedDefinition(data.totalTalkTime)} />
         </div>
 
         {/* Trend Charts */}
