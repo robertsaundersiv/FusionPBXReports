@@ -1384,6 +1384,16 @@ async def get_outbound_calls(
         for ext in extensions
         if ext.user_name
     }
+    # Word-set map for fuzzy person-name matching.
+    # Splits each user_name into lowercase words so that a caller_id_name like
+    # "Annette Zaballero" can match "WIF-CS-Annette Zaballero" by word overlap.
+    user_name_word_map = []
+    for ext in extensions:
+        if ext.user_name:
+            words = set(re.split(r'[\s\-_]+', ext.user_name.lower()))
+            words.discard('')
+            if len(words) >= 2:
+                user_name_word_map.append((words, ext.user_name))
     
     # Build agent identifier map for resolving canonical agent names
     agent_map = {}
@@ -1411,6 +1421,8 @@ async def get_outbound_calls(
             "extension_uuid": 0,
             "caller_name_exact": 0,
             "caller_name_extension": 0,
+            "caller_name_fuzzy": 0,
+            "caller_name_label": 0,
             "caller_number_extension": 0,
             "raw_identifier_fallback": 0,
         },
@@ -1482,8 +1494,28 @@ async def get_outbound_calls(
             if user_name:
                 source = "caller_number_extension"
 
+        # Fuzzy word-match: "Annette Zaballero" → "WIF-CS-Annette Zaballero"
+        if not user_name and record.caller_id_name:
+            caller_words = set(re.split(r'[\s\-_]+', record.caller_id_name.strip().lower()))
+            caller_words.discard('')
+            if len(caller_words) >= 2:
+                for ext_words, ext_user_name in user_name_word_map:
+                    if caller_words.issubset(ext_words) or ext_words.issuperset(caller_words):
+                        user_name = ext_user_name
+                        source = "caller_name_fuzzy"
+                        break
+
+        # Last resort: use caller_id_name directly as the display label.
+        # This ensures company/trunk names ("Triad Wireless", "Phoenix Internet")
+        # show as meaningful groups rather than being collapsed into "Unknown".
+        if not user_name and record.caller_id_name:
+            stripped = record.caller_id_name.strip()
+            if stripped:
+                user_name = stripped
+                source = "caller_name_label"
+
         if not user_name:
-            # No identifying agent info; bucket as unknown.
+            # Truly no identifying info at all.
             user_name = "unknown"
 
             diagnostics["unknown_records"] += 1
@@ -1494,11 +1526,12 @@ async def get_outbound_calls(
             else:
                 diagnostics["unknown_reasons"]["unresolved_with_identifiers"] += 1
 
-            unknown_label = (record.caller_id_name or "(blank)").strip() if record.caller_id_name else "(blank)"
+            unknown_label = "(blank)"
             unknown_label_counts[unknown_label] = unknown_label_counts.get(unknown_label, 0) + 1
         else:
             diagnostics["attributed_records"] += 1
             if source:
+                diagnostics["attribution_sources"].setdefault(source, 0)
                 diagnostics["attribution_sources"][source] += 1
 
         normalized_name = (user_name or "").strip()
