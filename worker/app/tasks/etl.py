@@ -118,6 +118,14 @@ async def _sync_recent_cdr_records(lookback_minutes: int = 5, batch_size: int = 
                             existing.cc_agent_uuid = cdr_data.get('cc_agent_uuid')
                         if existing.cc_agent is None and cdr_data.get('cc_agent'):
                             existing.cc_agent = cdr_data.get('cc_agent')
+                        if existing.originating_leg_uuid is None and cdr_data.get('originating_leg_uuid'):
+                            existing.originating_leg_uuid = cdr_data.get('originating_leg_uuid')
+                        if existing.accountcode is None and cdr_data.get('accountcode'):
+                            existing.accountcode = cdr_data.get('accountcode')
+                        if existing.bridge_uuid is None and cdr_data.get('bridge_uuid'):
+                            existing.bridge_uuid = cdr_data.get('bridge_uuid')
+                        if existing.leg is None and cdr_data.get('leg'):
+                            existing.leg = cdr_data.get('leg')
                         batch_skipped += 1
                         continue
                     
@@ -139,6 +147,10 @@ async def _sync_recent_cdr_records(lookback_minutes: int = 5, batch_size: int = 
                         duration=int(cdr_data.get('duration', 0)),
                         billsec=int(cdr_data.get('billsec', 0)),
                         extension_uuid=cdr_data.get('extension_uuid'),
+                        accountcode=cdr_data.get('accountcode'),
+                        bridge_uuid=cdr_data.get('bridge_uuid'),
+                        leg=cdr_data.get('leg'),
+                        originating_leg_uuid=cdr_data.get('originating_leg_uuid'),
                         cc_queue=cdr_data.get('cc_queue'),
                         cc_queue_joined_epoch=int(cdr_data.get('cc_queue_joined_epoch', 0)) if cdr_data.get('cc_queue_joined_epoch') else None,
                         cc_queue_answered_epoch=int(cdr_data.get('cc_queue_answered_epoch', 0)) if cdr_data.get('cc_queue_answered_epoch') else None,
@@ -163,7 +175,12 @@ async def _sync_recent_cdr_records(lookback_minutes: int = 5, batch_size: int = 
                 
                 # Commit remaining records from this batch
                 db.commit()
-                
+
+                # Resolve outbound attribution: for B-leg records that have
+                # originating_leg_uuid but no extension_uuid, look up the
+                # A-leg and copy its extension_uuid so agent reports are accurate.
+                _resolve_outbound_attribution(db)
+
                 total_synced += batch_synced
                 total_skipped += batch_skipped
                 
@@ -188,6 +205,60 @@ async def _sync_recent_cdr_records(lookback_minutes: int = 5, batch_size: int = 
             await client.close()
     finally:
         db.close()
+
+
+def _resolve_outbound_attribution(db) -> int:
+    """
+    For outbound B-leg records that have originating_leg_uuid but no
+    extension_uuid, look up the matching A-leg and copy its extension_uuid.
+
+    In FusionPBX, when an agent places a direct outbound call the PBX writes:
+      - A-leg (local): direction=local, extension_uuid=<agent ext UUID>
+      - B-leg (outbound trunk): direction=outbound, no extension_uuid,
+        originating_leg_uuid = A-leg xml_cdr_uuid
+
+    Without this resolution the B-leg always shows as "Unknown" in reports.
+    Returns the number of records updated.
+    """
+    # Find outbound B-legs that are missing extension_uuid but have
+    # originating_leg_uuid populated.
+    b_legs = (
+        db.query(CDRRecord)
+        .filter(
+            CDRRecord.direction == "outbound",
+            CDRRecord.extension_uuid.is_(None),
+            CDRRecord.originating_leg_uuid.isnot(None),
+        )
+        .all()
+    )
+
+    if not b_legs:
+        return 0
+
+    # Build a set of originating UUIDs to fetch in one query.
+    orig_uuids = {r.originating_leg_uuid for r in b_legs}
+    a_legs = (
+        db.query(CDRRecord)
+        .filter(CDRRecord.xml_cdr_uuid.in_(orig_uuids))
+        .all()
+    )
+    a_leg_map = {r.xml_cdr_uuid: r for r in a_legs}
+
+    updated = 0
+    for b in b_legs:
+        a = a_leg_map.get(b.originating_leg_uuid)
+        if a and a.extension_uuid:
+            b.extension_uuid = a.extension_uuid
+            updated += 1
+
+    if updated:
+        db.commit()
+        logger.info(
+            f"Resolved outbound attribution: {updated} B-leg record(s) "
+            "backfilled with extension_uuid from A-leg"
+        )
+
+    return updated
 
 
 @celery_app.task(name="app.tasks.cleanup_old_cdr_records")
