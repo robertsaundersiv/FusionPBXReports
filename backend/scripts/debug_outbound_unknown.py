@@ -7,7 +7,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from app.database import SessionLocal
-from app.models.cdr import CDRRecord
+from app.models import CDRRecord
 from sqlalchemy import text, func
 
 db = SessionLocal()
