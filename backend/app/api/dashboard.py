@@ -1394,18 +1394,37 @@ async def get_outbound_calls(
             words.discard('')
             if len(words) >= 2:
                 user_name_word_map.append((words, ext.user_name))
+
+    # Build agent-name and extension alias maps for outbound caller attribution.
+    known_agent_name_map = {}
+    agent_name_word_map = []
+    agent_extension_map = {}
     
     # Build agent identifier map for resolving canonical agent names
     agent_map = {}
     for agent in db.query(Agent).all():
         if not agent.agent_name:
             continue
+        normalized_agent_name = agent.agent_name.strip().lower()
+        if normalized_agent_name:
+            known_agent_name_map[normalized_agent_name] = agent.agent_name
+
+        name_words = set(re.split(r'[\s\-_]+', normalized_agent_name))
+        name_words.discard('')
+        if len(name_words) >= 2:
+            agent_name_word_map.append((name_words, agent.agent_name))
+
         if agent.agent_uuid:
             agent_map[agent.agent_uuid] = agent.agent_name
         if agent.extension:
-            agent_map[agent.extension] = agent.agent_name
+            ext_str = str(agent.extension).strip()
+            agent_map[ext_str] = agent.agent_name
+            agent_extension_map[ext_str] = agent.agent_name
         if agent.agent_contact:
             agent_map[agent.agent_contact] = agent.agent_name
+            contact_match = re.search(r'user/(\d{3,6})@', str(agent.agent_contact))
+            if contact_match:
+                agent_extension_map[contact_match.group(1)] = agent.agent_name
         agent_map[agent.agent_name] = agent.agent_name
 
     # Group by extension to collect per-user stats
@@ -1467,13 +1486,14 @@ async def get_outbound_calls(
         if not user_name and record.caller_id_name:
             caller_label = str(record.caller_id_name).strip()
             if caller_label:
-                user_name = known_user_name_map.get(caller_label.lower())
+                label_key = caller_label.lower()
+                user_name = known_agent_name_map.get(label_key) or known_user_name_map.get(label_key)
                 if user_name:
                     source = "caller_name_exact"
 
             if not user_name:
                 for token in re.findall(r"\b\d{3,6}\b", caller_label):
-                    mapped_name = extension_number_map.get(token)
+                    mapped_name = agent_extension_map.get(token) or extension_number_map.get(token)
                     if mapped_name:
                         user_name = mapped_name
                         source = "caller_name_extension"
@@ -1489,7 +1509,8 @@ async def get_outbound_calls(
 
         # For outbound calls, caller_id_number is the dialing extension — try it directly.
         if not user_name and record.caller_id_number:
-            user_name = extension_number_map.get(str(record.caller_id_number).strip())
+            number_key = str(record.caller_id_number).strip()
+            user_name = agent_extension_map.get(number_key) or extension_number_map.get(number_key)
             if user_name:
                 source = "caller_number_extension"
 
@@ -1498,26 +1519,33 @@ async def get_outbound_calls(
             caller_words = set(re.split(r'[\s\-_]+', record.caller_id_name.strip().lower()))
             caller_words.discard('')
             if len(caller_words) >= 2:
+                for agent_words, agent_user_name in agent_name_word_map:
+                    if caller_words.issubset(agent_words) or agent_words.issuperset(caller_words):
+                        user_name = agent_user_name
+                        source = "caller_name_fuzzy"
+                        break
+
+            if not user_name and len(caller_words) >= 2:
                 for ext_words, ext_user_name in user_name_word_map:
                     if caller_words.issubset(ext_words) or ext_words.issuperset(caller_words):
                         user_name = ext_user_name
                         source = "caller_name_fuzzy"
                         break
 
-            if not user_name:
-                # Could not resolve to a known agent/extension — trunk/company call.
-                user_name = "unknown"
+        if not user_name:
+            # Could not resolve to a known agent/extension — trunk/company call.
+            user_name = "unknown"
 
-                diagnostics["unknown_records"] += 1
-                if not has_any_identifier:
-                    diagnostics["unknown_reasons"]["missing_all_identifiers"] += 1
-                elif has_extension_uuid and not extension_uuid_matched:
-                    diagnostics["unknown_reasons"]["extension_uuid_unmapped"] += 1
-                else:
-                    diagnostics["unknown_reasons"]["unresolved_with_identifiers"] += 1
+            diagnostics["unknown_records"] += 1
+            if not has_any_identifier:
+                diagnostics["unknown_reasons"]["missing_all_identifiers"] += 1
+            elif has_extension_uuid and not extension_uuid_matched:
+                diagnostics["unknown_reasons"]["extension_uuid_unmapped"] += 1
+            else:
+                diagnostics["unknown_reasons"]["unresolved_with_identifiers"] += 1
 
-                unknown_label = (record.caller_id_name or "(blank)").strip() or "(blank)"
-                unknown_label_counts[unknown_label] = unknown_label_counts.get(unknown_label, 0) + 1
+            unknown_label = (record.caller_id_name or "(blank)").strip() or "(blank)"
+            unknown_label_counts[unknown_label] = unknown_label_counts.get(unknown_label, 0) + 1
         else:
             diagnostics["attributed_records"] += 1
             if source:
