@@ -9,7 +9,7 @@ from celery import shared_task
 from app.celery_app import celery_app
 from app.clients.fusionpbx import get_fusion_client
 from app.database import SessionLocal
-from app.models import CDRRecord
+from app.models import Agent, CDRRecord, Queue
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +105,13 @@ async def _sync_recent_cdr_records(lookback_minutes: int = 5, batch_size: int = 
                         CDRRecord.xml_cdr_uuid == xml_cdr_uuid
                     ).first()
                     
+                    raw_mos_val = cdr_data.get('rtp_audio_in_mos')
+                    mos_value = float(raw_mos_val) if raw_mos_val not in (None, '', '0', 0) else None
+
                     if existing:
+                        # Backfill MOS if it was missing from an earlier sync
+                        if existing.rtp_audio_in_mos is None and mos_value is not None:
+                            existing.rtp_audio_in_mos = mos_value
                         batch_skipped += 1
                         continue
                     
@@ -135,6 +141,7 @@ async def _sync_recent_cdr_records(lookback_minutes: int = 5, batch_size: int = 
                         hangup_cause=cdr_data.get('hangup_cause'),
                         hangup_cause_q850=cdr_data.get('hangup_cause_q850'),
                         domain_name=cdr_data.get('domain_name'),
+                        rtp_audio_in_mos=mos_value,
                     )
                     
                     db.add(cdr)
