@@ -115,8 +115,39 @@ class FusionPBXClient:
         except Exception as e:
             logger.error(f"Error fetching CDR records: {e}")
             return []
-    
-    async def get_call_center_queues(self) -> List[Dict]:
+
+    async def get_xml_cdr_by_uuid(self, uuid: str) -> Optional[Dict]:
+        """Fetch a single CDR record by its xml_cdr_uuid."""
+        if not self.session:
+            await self.initialize()
+        try:
+            url = f"{self.host}/app/api/7/xml_cdr/{uuid}"
+            async with self.session.get(
+                url,
+                headers=self._get_headers(),
+                timeout=aiohttp.ClientTimeout(total=self.timeout),
+                ssl=False,
+            ) as resp:
+                if resp.status == 404:
+                    return None
+                if resp.status != 200:
+                    logger.error(f"CDR UUID lookup error {resp.status} for {uuid}")
+                    return None
+                data = await resp.json()
+                if isinstance(data, list):
+                    return data[0] if data else None
+                if isinstance(data, dict):
+                    # API may return {"xml_cdr": [{...}]}, {"xml_cdr": {...}}, or the record directly
+                    inner = data.get("xml_cdr", data)
+                    if isinstance(inner, list):
+                        return inner[0] if inner else None
+                    return inner
+                return None
+        except Exception as e:
+            logger.error(f"Error fetching CDR by UUID {uuid}: {e}")
+            return None
+
+
         """Fetch call center queue metadata"""
         if not self.session:
             await self.initialize()

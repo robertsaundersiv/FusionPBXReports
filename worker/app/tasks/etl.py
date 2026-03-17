@@ -261,6 +261,224 @@ def _resolve_outbound_attribution(db) -> int:
     return updated
 
 
+@celery_app.task(name="app.tasks.fetch_missing_a_legs")
+def fetch_missing_a_legs():
+    """
+    One-off task: for outbound B-leg records that are missing extension_uuid,
+    re-fetch them individually from the FusionPBX single-record API (/xml_cdr/{uuid})
+    which returns extension_uuid even though the bulk date-range API omits it.
+
+    Trigger:
+        docker exec <worker> celery -A app.celery_app call app.tasks.fetch_missing_a_legs
+    """
+    logger.info("Starting missing extension_uuid fetch task (per-UUID API)")
+    try:
+        result = asyncio.run(_fetch_missing_a_legs_async())
+        logger.info(f"Per-UUID fetch complete: {result}")
+        return result
+    except Exception as e:
+        logger.error(f"Per-UUID fetch failed: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
+
+
+async def _fetch_missing_a_legs_async() -> dict:
+    """
+    For every outbound record missing extension_uuid, call the per-UUID
+    FusionPBX endpoint to retrieve the full record and patch extension_uuid.
+    The bulk date-range API omits extension_uuid for outbound legs; the
+    single-record endpoint returns it correctly.
+    """
+    db = SessionLocal()
+    try:
+        unresolved = (
+            db.query(CDRRecord)
+            .filter(
+                CDRRecord.direction == "outbound",
+                CDRRecord.extension_uuid.is_(None),
+            )
+            .all()
+        )
+
+        if not unresolved:
+            logger.info("No outbound records missing extension_uuid — nothing to do")
+            return {"status": "success", "fetched": 0, "updated": 0, "not_found": 0}
+
+        logger.info(f"Fetching {len(unresolved)} outbound records individually by UUID")
+
+        client = get_fusion_client()
+        await client.initialize()
+
+        updated = 0
+        not_found = 0
+
+        try:
+            for i, record in enumerate(unresolved):
+                cdr_data = await client.get_xml_cdr_by_uuid(record.xml_cdr_uuid)
+                if not cdr_data:
+                    not_found += 1
+                    continue
+
+                ext_uuid = cdr_data.get("extension_uuid")
+                if ext_uuid:
+                    record.extension_uuid = ext_uuid
+                    updated += 1
+
+                # Also backfill other fields the bulk API may have omitted
+                if record.accountcode is None and cdr_data.get("accountcode"):
+                    record.accountcode = cdr_data.get("accountcode")
+                if record.bridge_uuid is None and cdr_data.get("bridge_uuid"):
+                    record.bridge_uuid = cdr_data.get("bridge_uuid")
+                if record.leg is None and cdr_data.get("leg"):
+                    record.leg = cdr_data.get("leg")
+                if record.originating_leg_uuid is None and cdr_data.get("originating_leg_uuid"):
+                    record.originating_leg_uuid = cdr_data.get("originating_leg_uuid")
+
+                if (i + 1) % 50 == 0:
+                    db.commit()
+                    logger.info(f"  Progress: {i + 1}/{len(unresolved)} — {updated} updated so far")
+
+            db.commit()
+        finally:
+            await client.close()
+
+        logger.info(f"Per-UUID fetch done: {updated} updated, {not_found} not found in FusionPBX")
+        return {
+            "status": "success",
+            "fetched": len(unresolved),
+            "updated": updated,
+            "not_found": not_found,
+        }
+    finally:
+        db.close()
+
+
+@celery_app.task(name="app.tasks.backfill_outbound_attribution", bind=True)
+def backfill_outbound_attribution(self):
+    """
+    One-off task: backfill originating_leg_uuid for historical outbound records
+    that were synced before the fix was deployed, then resolve attribution.
+
+    Finds the date range of affected records, iterates through the FusionPBX
+    API in 1-day chunks, patches originating_leg_uuid on matching DB rows,
+    and finally runs _resolve_outbound_attribution so extension_uuid is set.
+
+    Trigger manually:
+        docker exec <worker> celery -A app.celery_app call app.tasks.backfill_outbound_attribution
+    """
+    logger.info("Starting one-off outbound attribution backfill")
+    try:
+        result = asyncio.run(_backfill_outbound_attribution_async())
+        logger.info(f"Backfill complete: {result}")
+        return result
+    except Exception as e:
+        logger.error(f"Backfill failed: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
+
+
+async def _backfill_outbound_attribution_async(chunk_days: int = 1, batch_size: int = 1000) -> dict:
+    """
+    Async implementation of the historical originating_leg_uuid backfill.
+    """
+    db = SessionLocal()
+    try:
+        from sqlalchemy import func as sa_func
+
+        # Find the epoch range of records that are missing originating_leg_uuid
+        row = (
+            db.query(
+                sa_func.min(CDRRecord.start_epoch),
+                sa_func.max(CDRRecord.start_epoch),
+            )
+            .filter(
+                CDRRecord.direction == "outbound",
+                CDRRecord.originating_leg_uuid.is_(None),
+                CDRRecord.start_epoch.isnot(None),
+            )
+            .one()
+        )
+        min_epoch, max_epoch = row
+
+        if not min_epoch or not max_epoch:
+            logger.info("No outbound records missing originating_leg_uuid — nothing to do")
+            return {"status": "success", "chunks_processed": 0, "records_updated": 0, "resolved": 0}
+
+        range_start = datetime.fromtimestamp(min_epoch, tz=timezone.utc)
+        range_end = datetime.fromtimestamp(max_epoch, tz=timezone.utc) + timedelta(seconds=1)
+        logger.info(f"Backfill range: {range_start.isoformat()} → {range_end.isoformat()}")
+
+        client = get_fusion_client()
+        await client.initialize()
+
+        chunks_processed = 0
+        records_updated = 0
+        chunk_start = range_start
+
+        try:
+            while chunk_start < range_end:
+                chunk_end = min(chunk_start + timedelta(days=chunk_days), range_end)
+                offset = 0
+
+                while True:
+                    cdrs = await client.get_xml_cdr(
+                        start_date=chunk_start,
+                        end_date=chunk_end,
+                        limit=batch_size,
+                        offset=offset,
+                    )
+                    if not cdrs:
+                        break
+
+                    # Build a lookup of uuid → originating_leg_uuid for this batch
+                    orig_map = {
+                        c["xml_cdr_uuid"]: c.get("originating_leg_uuid")
+                        for c in cdrs
+                        if c.get("xml_cdr_uuid") and c.get("originating_leg_uuid")
+                    }
+
+                    if orig_map:
+                        # Fetch matching DB rows in one query
+                        rows = (
+                            db.query(CDRRecord)
+                            .filter(
+                                CDRRecord.xml_cdr_uuid.in_(list(orig_map.keys())),
+                                CDRRecord.originating_leg_uuid.is_(None),
+                            )
+                            .all()
+                        )
+                        for row in rows:
+                            row.originating_leg_uuid = orig_map[row.xml_cdr_uuid]
+                            records_updated += 1
+
+                        if rows:
+                            db.commit()
+
+                    if len(cdrs) < batch_size:
+                        break
+                    offset += batch_size
+
+                chunks_processed += 1
+                logger.info(
+                    f"Chunk {chunk_start.date()} done — "
+                    f"{records_updated} total records updated so far"
+                )
+                chunk_start = chunk_end
+
+        finally:
+            await client.close()
+
+        # Now resolve extension_uuid from A-leg for all newly populated rows
+        resolved = _resolve_outbound_attribution(db)
+
+        return {
+            "status": "success",
+            "chunks_processed": chunks_processed,
+            "records_updated": records_updated,
+            "resolved": resolved,
+        }
+    finally:
+        db.close()
+
+
 @celery_app.task(name="app.tasks.cleanup_old_cdr_records")
 def cleanup_old_cdr_records(retention_days: int = 31):
     """
