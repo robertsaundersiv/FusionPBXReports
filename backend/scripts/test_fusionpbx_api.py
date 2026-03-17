@@ -18,7 +18,7 @@ async def test_api():
     print("FusionPBX API Connection Test")
     print("=" * 60)
     print(f"Host: {client.host}")
-    print(f"API Key: {client.api_key[:10]}..." if len(client.api_key) > 10 else f"API Key: {client.api_key}")
+    print(f"API Key: {'*' * len(client.api_key)} (length={len(client.api_key)})" if client.api_key else "API Key: not configured")
     print()
     
     try:
