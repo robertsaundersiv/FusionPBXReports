@@ -11,6 +11,9 @@ from app.tasks.etl import (
 from app.tasks.extensions import (
     sync_extensions,
 )
+from app.tasks.metadata import (
+    sync_metadata,
+)
 
 __all__ = [
     "ingest_cdr_records",
@@ -19,4 +22,5 @@ __all__ = [
     "compute_hourly_aggregates",
     "compute_daily_aggregates",
     "sync_extensions",
+    "sync_metadata",
 ]

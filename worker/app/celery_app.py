@@ -2,7 +2,11 @@
 Worker package - ETL and scheduled tasks
 """
 from celery import Celery
+from celery.signals import worker_ready
 import os
+import logging
+
+logger = logging.getLogger(__name__)
 
 redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
@@ -25,3 +29,18 @@ celery_app.conf.update(
 
 # Auto-discover tasks
 celery_app.autodiscover_tasks(["app.tasks"])
+
+
+@worker_ready.connect
+def on_worker_ready(sender, **kwargs):
+    """
+    Immediately dispatch critical startup tasks when the worker comes online.
+    This ensures queues, agents, extensions, and CDR records are populated
+    on a fresh start without waiting for the first beat schedule tick.
+    """
+    logger.info("Worker ready — dispatching startup tasks")
+    # Run in order: metadata (queues+agents) first, then extensions, then CDR
+    celery_app.send_task("app.tasks.sync_metadata")
+    celery_app.send_task("app.tasks.sync_extensions")
+    celery_app.send_task("app.tasks.ingest_cdr_records")
+    logger.info("Startup tasks queued")

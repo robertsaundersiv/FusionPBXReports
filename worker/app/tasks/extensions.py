@@ -71,19 +71,21 @@ async def _sync_extensions_from_api() -> dict:
                     enabled = ext_data.get('enabled', True)
                     
                     # Skip if we don't have the minimum required fields
-                    if not extension_uuid or not extension:
+                    if not extension or not extension_uuid:
                         logger.debug(f"Skipping extension due to missing uuid or number")
                         stats['failed'] += 1
                         continue
                     
-                    # Try to find existing extension by uuid
+                    # Try to find existing extension by uuid OR by extension number (fallback)
                     existing = db.query(Extension).filter(
-                        Extension.extension_uuid == extension_uuid
+                        (Extension.extension_uuid == extension_uuid) |
+                        (Extension.extension == extension)
                     ).first()
                     
                     if existing:
                         # Update existing record
                         existing.extension = extension
+                        existing.extension_uuid = extension_uuid
                         existing.user_name = description or existing.user_name
                         existing.user_uuid = domain_uuid
                         existing.enabled = enabled if isinstance(enabled, bool) else enabled.lower() == 'true'
@@ -117,8 +119,9 @@ async def _sync_extensions_from_api() -> dict:
                         logger.debug(f"Created extension {extension}: {description}")
                         
                 except Exception as e:
-                    logger.error(f"Error processing extension: {e}")
+                    logger.error(f"Error processing extension {ext_data.get('extension', 'unknown')}: {e}")
                     stats['failed'] += 1
+                    db.rollback()
                     continue
             
             # Commit all changes

@@ -63,14 +63,16 @@ def sync_extensions_to_db(extensions: list) -> dict:
                     stats['failed'] += 1
                     continue
                 
-                # Try to find existing extension by uuid
+                # Try to find existing extension by uuid OR by extension number
                 existing = db.query(Extension).filter(
-                    Extension.extension_uuid == extension_uuid
+                    (Extension.extension_uuid == extension_uuid) |
+                    (Extension.extension == extension)
                 ).first()
                 
                 if existing:
                     # Update existing record
                     existing.extension = extension
+                    existing.extension_uuid = extension_uuid
                     existing.user_name = description or existing.user_name
                     existing.user_uuid = domain_uuid
                     existing.enabled = enabled if isinstance(enabled, bool) else enabled.lower() == 'true'
@@ -104,8 +106,9 @@ def sync_extensions_to_db(extensions: list) -> dict:
                     print(f"Created extension {extension} ({extension_uuid}): {description}")
                     
             except Exception as e:
-                print(f"Error processing extension: {e}")
+                print(f"Error processing extension {ext_data.get('extension', 'unknown')}: {e}")
                 stats['failed'] += 1
+                db.rollback()
                 continue
         
         # Commit all changes

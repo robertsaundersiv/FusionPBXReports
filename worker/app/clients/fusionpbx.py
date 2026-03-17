@@ -147,7 +147,7 @@ class FusionPBXClient:
             logger.error(f"Error fetching CDR by UUID {uuid}: {e}")
             return None
 
-
+    async def get_call_center_queues(self) -> List[Dict]:
         """Fetch call center queue metadata"""
         if not self.session:
             await self.initialize()

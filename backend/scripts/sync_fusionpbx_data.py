@@ -75,11 +75,13 @@ async def sync_queues():
                         queue = Queue(**mapped_data)
                         db.add(queue)
                         total_inserted += 1
+                    
+                    # Commit per queue to avoid transaction abort cascades
+                    db.commit()
                 except Exception as e:
-                    print(f"Error processing queue {queue_data}: {e}")
+                    print(f"Error processing queue {queue_data.get('queue_name', 'unknown')}: {e}")
+                    db.rollback()
                     total_skipped += 1
-            
-            db.commit()
         
         print(f"✓ Synced {len(queues)} queues")
         print(f"  Inserted: {total_inserted}")
@@ -108,39 +110,45 @@ async def sync_agents():
         
         with get_db_context() as db:
             for agent_data in agents:
-                agent_uuid = agent_data.get('agent_uuid')
-                agent_name = agent_data.get('agent_name')
-                
-                if not agent_uuid or not agent_name:
+                try:
+                    agent_uuid = agent_data.get('agent_uuid')
+                    agent_name = agent_data.get('agent_name')
+                    
+                    if not agent_uuid or not agent_name:
+                        continue
+                    
+                    # Check if agent exists by agent_uuid
+                    existing = db.query(Agent).filter(
+                        Agent.agent_uuid == agent_uuid
+                    ).first()
+                    
+                    # Map FusionPBX fields to our Agent model
+                    mapped_data = {
+                        'agent_uuid': agent_uuid,
+                        'agent_name': agent_name,
+                        'agent_contact': agent_data.get('agent_contact'),
+                        'extension': agent_data.get('agent_extension'),
+                        'enabled': agent_data.get('agent_enabled', True),
+                        'last_synced': datetime.utcnow()
+                    }
+                    
+                    if existing:
+                        # Update existing
+                        for key, value in mapped_data.items():
+                            setattr(existing, key, value)
+                        total_updated += 1
+                    else:
+                        # Create new
+                        agent = Agent(**mapped_data)
+                        db.add(agent)
+                        total_inserted += 1
+                    
+                    # Commit per agent to avoid transaction abort cascades
+                    db.commit()
+                except Exception as e:
+                    print(f"Error processing agent {agent_data.get('agent_name', 'unknown')}: {e}")
+                    db.rollback()
                     continue
-                
-                # Check if agent exists by agent_uuid
-                existing = db.query(Agent).filter(
-                    Agent.agent_uuid == agent_uuid
-                ).first()
-                
-                # Map FusionPBX fields to our Agent model
-                mapped_data = {
-                    'agent_uuid': agent_uuid,
-                    'agent_name': agent_name,
-                    'agent_contact': agent_data.get('agent_contact'),
-                    'extension': agent_data.get('agent_extension'),
-                    'enabled': agent_data.get('agent_enabled', True),
-                    'last_synced': datetime.utcnow()
-                }
-                
-                if existing:
-                    # Update existing
-                    for key, value in mapped_data.items():
-                        setattr(existing, key, value)
-                    total_updated += 1
-                else:
-                    # Create new
-                    agent = Agent(**mapped_data)
-                    db.add(agent)
-                    total_inserted += 1
-            
-            db.commit()
         
         print(f"✓ Synced {len(agents)} agents")
         print(f"  Inserted: {total_inserted}")

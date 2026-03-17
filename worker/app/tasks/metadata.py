@@ -128,12 +128,16 @@ async def _sync_queues(client: FusionPBXClient) -> dict:
                     queue_obj = Queue(**mapped_data)
                     db.add(queue_obj)
                     stats['created'] += 1
+                
+                # Commit each queue individually to avoid transaction abort cascades
+                db.commit()
                     
             except Exception as e:
-                logger.error(f"Error processing queue {queue}: {e}")
+                logger.error(f"Error processing queue {queue_data.get('queue_name', 'unknown')}: {e}")
+                db.rollback()  # Clear the aborted transaction
                 stats['skipped'] += 1
+                continue
 
-        db.commit()
         logger.info(f"Queue sync completed: {stats}")
 
     except Exception:
@@ -205,12 +209,16 @@ async def _sync_agents(client: FusionPBXClient) -> dict:
                     agent_obj = Agent(**mapped_data)
                     db.add(agent_obj)
                     stats['created'] += 1
+                
+                # Commit each agent individually to avoid transaction abort cascades
+                db.commit()
                     
             except Exception as e:
-                logger.error(f"Error processing agent {agent}: {e}")
+                logger.error(f"Error processing agent {agent_data.get('agent_name', 'unknown')}: {e}")
+                db.rollback()  # Clear the aborted transaction
                 stats['skipped'] += 1
+                continue
 
-        db.commit()
         logger.info(f"Agent sync completed: {stats}")
 
     except Exception:
