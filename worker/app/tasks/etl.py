@@ -5,6 +5,7 @@ import logging
 import asyncio
 from datetime import datetime, timedelta, timezone
 from celery import shared_task
+from sqlalchemy.exc import IntegrityError
 
 from app.celery_app import celery_app
 from app.clients.fusionpbx import get_fusion_client
@@ -93,80 +94,98 @@ async def _sync_recent_cdr_records(lookback_minutes: int = 5, batch_size: int = 
                 
                 batch_synced = 0
                 batch_skipped = 0
+                seen_batch_uuids = set()
                 
                 for cdr_data in cdrs:
                     xml_cdr_uuid = cdr_data.get('xml_cdr_uuid')
                     if not xml_cdr_uuid:
                         batch_skipped += 1
                         continue
-                    
-                    # Check if record already exists
-                    existing = db.query(CDRRecord).filter(
-                        CDRRecord.xml_cdr_uuid == xml_cdr_uuid
-                    ).first()
-                    
-                    raw_mos_val = cdr_data.get('rtp_audio_in_mos')
-                    mos_value = float(raw_mos_val) if raw_mos_val not in (None, '', '0', 0) else None
 
-                    if existing:
-                        # Backfill fields that were missing from earlier syncs
-                        if existing.rtp_audio_in_mos is None and mos_value is not None:
-                            existing.rtp_audio_in_mos = mos_value
-                        if existing.extension_uuid is None and cdr_data.get('extension_uuid'):
-                            existing.extension_uuid = cdr_data.get('extension_uuid')
-                        if existing.cc_agent_uuid is None and cdr_data.get('cc_agent_uuid'):
-                            existing.cc_agent_uuid = cdr_data.get('cc_agent_uuid')
-                        if existing.cc_agent is None and cdr_data.get('cc_agent'):
-                            existing.cc_agent = cdr_data.get('cc_agent')
-                        if existing.originating_leg_uuid is None and cdr_data.get('originating_leg_uuid'):
-                            existing.originating_leg_uuid = cdr_data.get('originating_leg_uuid')
-                        if existing.accountcode is None and cdr_data.get('accountcode'):
-                            existing.accountcode = cdr_data.get('accountcode')
-                        if existing.bridge_uuid is None and cdr_data.get('bridge_uuid'):
-                            existing.bridge_uuid = cdr_data.get('bridge_uuid')
-                        if existing.leg is None and cdr_data.get('leg'):
-                            existing.leg = cdr_data.get('leg')
+                    # FusionPBX can occasionally return duplicate UUIDs in the
+                    # same page; skip duplicates early to avoid unique violations.
+                    if xml_cdr_uuid in seen_batch_uuids:
                         batch_skipped += 1
                         continue
+                    seen_batch_uuids.add(xml_cdr_uuid)
                     
-                    # Parse timestamps
-                    start_epoch = cdr_data.get('start_epoch')
-                    answer_epoch = cdr_data.get('answer_epoch')
-                    end_epoch = cdr_data.get('end_epoch')
-                    
-                    # Create new CDR record
-                    cdr = CDRRecord(
-                        xml_cdr_uuid=xml_cdr_uuid,
-                        caller_id_name=cdr_data.get('caller_id_name'),
-                        caller_id_number=cdr_data.get('caller_id_number'),
-                        destination_number=cdr_data.get('destination_number'),
-                        direction=cdr_data.get('direction'),
-                        start_epoch=int(start_epoch) if start_epoch else None,
-                        answer_epoch=int(answer_epoch) if answer_epoch else None,
-                        end_epoch=int(end_epoch) if end_epoch else None,
-                        duration=int(cdr_data.get('duration', 0)),
-                        billsec=int(cdr_data.get('billsec', 0)),
-                        extension_uuid=cdr_data.get('extension_uuid'),
-                        accountcode=cdr_data.get('accountcode'),
-                        bridge_uuid=cdr_data.get('bridge_uuid'),
-                        leg=cdr_data.get('leg'),
-                        originating_leg_uuid=cdr_data.get('originating_leg_uuid'),
-                        cc_queue=cdr_data.get('cc_queue'),
-                        cc_queue_joined_epoch=int(cdr_data.get('cc_queue_joined_epoch', 0)) if cdr_data.get('cc_queue_joined_epoch') else None,
-                        cc_queue_answered_epoch=int(cdr_data.get('cc_queue_answered_epoch', 0)) if cdr_data.get('cc_queue_answered_epoch') else None,
-                        cc_agent_uuid=cdr_data.get('cc_agent_uuid'),
-                        cc_agent=cdr_data.get('cc_agent'),
-                        cc_agent_type=cdr_data.get('cc_agent_type'),
-                        cc_member_uuid=cdr_data.get('cc_member_uuid'),
-                        status=cdr_data.get('hangup_cause', 'UNKNOWN'),
-                        hangup_cause=cdr_data.get('hangup_cause'),
-                        hangup_cause_q850=cdr_data.get('hangup_cause_q850'),
-                        domain_name=cdr_data.get('domain_name'),
-                        rtp_audio_in_mos=mos_value,
-                    )
-                    
-                    db.add(cdr)
-                    batch_synced += 1
+                    try:
+                        # Use a savepoint so a duplicate insert rolls back only
+                        # this one record, not the full batch transaction.
+                        with db.begin_nested():
+                            # Check if record already exists
+                            existing = db.query(CDRRecord).filter(
+                                CDRRecord.xml_cdr_uuid == xml_cdr_uuid
+                            ).first()
+
+                            raw_mos_val = cdr_data.get('rtp_audio_in_mos')
+                            mos_value = float(raw_mos_val) if raw_mos_val not in (None, '', '0', 0) else None
+
+                            if existing:
+                                # Backfill fields that were missing from earlier syncs
+                                if existing.rtp_audio_in_mos is None and mos_value is not None:
+                                    existing.rtp_audio_in_mos = mos_value
+                                if existing.extension_uuid is None and cdr_data.get('extension_uuid'):
+                                    existing.extension_uuid = cdr_data.get('extension_uuid')
+                                if existing.cc_agent_uuid is None and cdr_data.get('cc_agent_uuid'):
+                                    existing.cc_agent_uuid = cdr_data.get('cc_agent_uuid')
+                                if existing.cc_agent is None and cdr_data.get('cc_agent'):
+                                    existing.cc_agent = cdr_data.get('cc_agent')
+                                if existing.originating_leg_uuid is None and cdr_data.get('originating_leg_uuid'):
+                                    existing.originating_leg_uuid = cdr_data.get('originating_leg_uuid')
+                                if existing.accountcode is None and cdr_data.get('accountcode'):
+                                    existing.accountcode = cdr_data.get('accountcode')
+                                if existing.bridge_uuid is None and cdr_data.get('bridge_uuid'):
+                                    existing.bridge_uuid = cdr_data.get('bridge_uuid')
+                                if existing.leg is None and cdr_data.get('leg'):
+                                    existing.leg = cdr_data.get('leg')
+                                batch_skipped += 1
+                                continue
+
+                            # Parse timestamps
+                            start_epoch = cdr_data.get('start_epoch')
+                            answer_epoch = cdr_data.get('answer_epoch')
+                            end_epoch = cdr_data.get('end_epoch')
+
+                            # Create new CDR record
+                            cdr = CDRRecord(
+                                xml_cdr_uuid=xml_cdr_uuid,
+                                caller_id_name=cdr_data.get('caller_id_name'),
+                                caller_id_number=cdr_data.get('caller_id_number'),
+                                destination_number=cdr_data.get('destination_number'),
+                                direction=cdr_data.get('direction'),
+                                start_epoch=int(start_epoch) if start_epoch else None,
+                                answer_epoch=int(answer_epoch) if answer_epoch else None,
+                                end_epoch=int(end_epoch) if end_epoch else None,
+                                duration=int(cdr_data.get('duration', 0)),
+                                billsec=int(cdr_data.get('billsec', 0)),
+                                extension_uuid=cdr_data.get('extension_uuid'),
+                                accountcode=cdr_data.get('accountcode'),
+                                bridge_uuid=cdr_data.get('bridge_uuid'),
+                                leg=cdr_data.get('leg'),
+                                originating_leg_uuid=cdr_data.get('originating_leg_uuid'),
+                                cc_queue=cdr_data.get('cc_queue'),
+                                cc_queue_joined_epoch=int(cdr_data.get('cc_queue_joined_epoch', 0)) if cdr_data.get('cc_queue_joined_epoch') else None,
+                                cc_queue_answered_epoch=int(cdr_data.get('cc_queue_answered_epoch', 0)) if cdr_data.get('cc_queue_answered_epoch') else None,
+                                cc_agent_uuid=cdr_data.get('cc_agent_uuid'),
+                                cc_agent=cdr_data.get('cc_agent'),
+                                cc_agent_type=cdr_data.get('cc_agent_type'),
+                                cc_member_uuid=cdr_data.get('cc_member_uuid'),
+                                status=cdr_data.get('hangup_cause', 'UNKNOWN'),
+                                hangup_cause=cdr_data.get('hangup_cause'),
+                                hangup_cause_q850=cdr_data.get('hangup_cause_q850'),
+                                domain_name=cdr_data.get('domain_name'),
+                                rtp_audio_in_mos=mos_value,
+                            )
+
+                            db.add(cdr)
+                            db.flush()
+                            batch_synced += 1
+                    except IntegrityError:
+                        # Another worker or concurrent process inserted the same
+                        # UUID after our existence check.
+                        batch_skipped += 1
+                        continue
                     
                     # Commit in batches
                     if batch_synced % 100 == 0:
