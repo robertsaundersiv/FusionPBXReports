@@ -156,6 +156,13 @@ class CDRRecord(Base):
     __table_args__ = (
         Index('ix_cdr_start_epoch_cc_queue', 'start_epoch', 'cc_queue'),
         Index('ix_cdr_answer_epoch', 'answer_epoch'),
+        Index('ix_cdr_cc_queue_joined_epoch', 'cc_queue_joined_epoch'),
+        Index('ix_cdr_cc_queue_answered_epoch', 'cc_queue_answered_epoch'),
+        Index('ix_cdr_cc_agent_uuid', 'cc_agent_uuid'),
+        Index('ix_cdr_cc_agent', 'cc_agent'),
+        Index('ix_cdr_extension_uuid', 'extension_uuid'),
+        Index('ix_cdr_cc_agent_start_epoch', 'cc_agent', 'start_epoch'),
+        Index('ix_cdr_cc_agent_uuid_start_epoch', 'cc_agent_uuid', 'start_epoch'),
     )
 
 

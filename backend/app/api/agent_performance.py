@@ -9,7 +9,7 @@ from collections import defaultdict
 
 from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy import or_, desc
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, load_only
 
 from app.auth import get_current_user
 from app.database import get_db
@@ -26,6 +26,49 @@ from app.utils.agent_performance_utils import (
 )
 
 router = APIRouter(prefix="/api/v1/agent-performance", tags=["agent-performance"])
+
+
+AGENT_ANALYTICS_COLUMNS = (
+    CDRRecord.xml_cdr_uuid,
+    CDRRecord.start_epoch,
+    CDRRecord.answer_epoch,
+    CDRRecord.end_epoch,
+    CDRRecord.direction,
+    CDRRecord.cc_queue,
+    CDRRecord.cc_queue_joined_epoch,
+    CDRRecord.cc_queue_answered_epoch,
+    CDRRecord.cc_queue_terminated_epoch,
+    CDRRecord.cc_queue_canceled_epoch,
+    CDRRecord.cc_agent_uuid,
+    CDRRecord.cc_agent,
+    CDRRecord.cc_agent_type,
+    CDRRecord.cc_agent_bridged,
+    CDRRecord.cc_side,
+    CDRRecord.cc_member_uuid,
+    CDRRecord.extension_uuid,
+    CDRRecord.call_center_queue_uuid,
+    CDRRecord.bridge_uuid,
+    CDRRecord.leg,
+    CDRRecord.status,
+    CDRRecord.missed_call,
+    CDRRecord.cc_cancel_reason,
+    CDRRecord.cc_cause,
+    CDRRecord.hangup_cause,
+    CDRRecord.sip_hangup_disposition,
+    CDRRecord.last_app,
+    CDRRecord.call_disposition,
+    CDRRecord.caller_id_name,
+    CDRRecord.caller_id_number,
+    CDRRecord.destination_number,
+    CDRRecord.duration,
+    CDRRecord.billsec,
+    CDRRecord.hold_accum_seconds,
+    CDRRecord.rtp_audio_in_mos,
+)
+
+
+def optimize_cdr_query(query):
+    return query.options(load_only(*AGENT_ANALYTICS_COLUMNS))
 
 
 def parse_csv_list(value: Optional[str]) -> List[str]:
@@ -196,6 +239,7 @@ async def get_agent_leaderboard(
         include_outbound,
         accessible_agent_ids,
     )
+    query = optimize_cdr_query(query)
 
     records = query.all()
 
@@ -296,6 +340,7 @@ async def get_agent_trends(
         include_outbound,
         accessible_agent_ids,
     )
+    query = optimize_cdr_query(query)
 
     records = query.all()
     buckets: Dict[str, Dict[str, Dict[str, CDRRecord]]] = {}
@@ -387,6 +432,7 @@ async def get_agent_performance_report(
         include_outbound,
         accessible_agent_ids,
     ).filter(CDRRecord.cc_queue.isnot(None))
+    query = optimize_cdr_query(query)
 
     records = query.all()
 
@@ -524,6 +570,7 @@ async def get_agent_outliers(
         include_outbound,
         accessible_agent_ids,
     )
+    query = optimize_cdr_query(query)
 
     records = query.all()
     handled_by_key: Dict[str, CDRRecord] = {}
@@ -605,6 +652,7 @@ async def get_agent_calls(
         include_outbound,
         accessible_agent_ids,
     )
+    query = optimize_cdr_query(query)
 
     if search:
         query = query.filter(CDRRecord.caller_id_number.ilike(f"%{search}%"))

@@ -3,7 +3,7 @@ API routes for dashboard data
 """
 import re
 from fastapi import APIRouter, Depends, Query, HTTPException
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, load_only
 from sqlalchemy import func, Integer, case, desc, or_, cast, String
 from app.database import get_db
 from app.models import CDRRecord, Queue, Agent, DailyAggregate, HourlyAggregate, User, Extension
@@ -18,6 +18,25 @@ router = APIRouter(prefix="/api/v1/dashboard", tags=["dashboard"])
 
 
 WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+
+QUEUE_ANALYTICS_COLUMNS = (
+    CDRRecord.caller_id_number,
+    CDRRecord.start_epoch,
+    CDRRecord.billsec,
+    CDRRecord.hangup_cause,
+    CDRRecord.last_app,
+    CDRRecord.call_disposition,
+    CDRRecord.cc_cause,
+    CDRRecord.cc_agent_type,
+    CDRRecord.hold_accum_seconds,
+    CDRRecord.rtp_audio_in_mos,
+    CDRRecord.cc_queue_joined_epoch,
+    CDRRecord.cc_queue_answered_epoch,
+)
+
+
+def optimize_queue_records_query(query):
+    return query.options(load_only(*QUEUE_ANALYTICS_COLUMNS))
 
 
 def to_sunday_first_weekday_index(python_weekday: int) -> int:
@@ -142,7 +161,8 @@ async def get_executive_overview(
         queue_records_query = queue_records_query.filter(or_(*extension_filters))
     if direction:
         queue_records_query = queue_records_query.filter(CDRRecord.direction == direction)
-    
+
+    queue_records_query = optimize_queue_records_query(queue_records_query)
     queue_records = queue_records_query.all()
     
     # Group by unique queue entries (caller + join time)
@@ -758,7 +778,8 @@ async def get_queue_performance(
         
         if direction:
             queue_records_query = queue_records_query.filter(CDRRecord.direction == direction)
-        
+
+        queue_records_query = optimize_queue_records_query(queue_records_query)
         queue_records = queue_records_query.all()
         
         # Group by unique queue entries (caller + join time)
@@ -788,10 +809,16 @@ async def get_queue_performance(
         
         # Count outcomes
         total_offered = len(unique_queue_entries)
-        total_answered = sum(1 for records in unique_queue_entries.values() 
-                            if any(r.cc_queue_answered_epoch is not None for r in records))
-        total_abandoned = sum(1 for records in unique_queue_entries.values()
-                             if is_true_abandoned(records))
+        entry_is_answered = {
+            key: any(r.cc_queue_answered_epoch is not None for r in records)
+            for key, records in unique_queue_entries.items()
+        }
+        entry_is_abandoned = {
+            key: is_true_abandoned(records)
+            for key, records in unique_queue_entries.items()
+        }
+        total_answered = sum(1 for is_answered in entry_is_answered.values() if is_answered)
+        total_abandoned = sum(1 for is_abandoned in entry_is_abandoned.values() if is_abandoned)
         
         answer_rate = (total_answered / total_offered * 100) if total_offered > 0 else 0
         abandon_rate = (total_abandoned / total_offered * 100) if total_offered > 0 else 0
@@ -846,8 +873,8 @@ async def get_queue_performance(
             offered_heatmap[key]["count"] += 1
             
             # Check if abandoned
-            records_for_this = unique_queue_entries.get((record.caller_id_number, record.cc_queue_joined_epoch), [])
-            if is_true_abandoned(records_for_this):
+            entry_key = (record.caller_id_number, record.cc_queue_joined_epoch)
+            if entry_is_abandoned.get(entry_key, False):
                 offered_heatmap[key]["abandoned"] += 1
             
             # ASA
