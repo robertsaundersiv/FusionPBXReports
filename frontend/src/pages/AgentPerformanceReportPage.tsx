@@ -60,6 +60,8 @@ export default function AgentPerformanceReportPage() {
     searchQuery: '',
   });
 
+  const canViewMissedCalls = Boolean(data?.can_view_missed_calls);
+
   useEffect(() => {
     const loadMetadata = async () => {
       try {
@@ -198,29 +200,40 @@ export default function AgentPerformanceReportPage() {
       'Calls Handled',
       'Talk Time Total (sec)',
       'Average Handle Time (sec)',
-      'Missed Calls',
     ];
+
+    if (canViewMissedCalls) {
+      headers.push('Missed Calls');
+    }
 
     queueColumns.forEach((queue) => {
       headers.push(`${queue.queue_name} Calls Handled`);
       headers.push(`${queue.queue_name} Talk Time (sec)`);
-      headers.push(`${queue.queue_name} Missed Calls`);
+      if (canViewMissedCalls) {
+        headers.push(`${queue.queue_name} Missed Calls`);
+      }
     });
 
     lines.push(headers.map((header) => `"${header}"`).join(','));
 
     displayAgents.forEach((agent) => {
-      const baseRow = [
+      const baseRow: Array<string | number> = [
         `"${agent.agent_name}"`,
         agent.handled_calls,
         agent.talk_time_sec,
         agent.aht_sec ?? '',
-        agent.missed_calls,
       ];
+
+      if (canViewMissedCalls) {
+        baseRow.push(agent.missed_calls);
+      }
 
       const queueValues = queueColumns.flatMap((queue) => {
         const metrics = getQueueMetrics(agent, queue.queue_id);
-        return [metrics.handled_calls, metrics.talk_time_sec, metrics.missed_calls];
+        if (canViewMissedCalls) {
+          return [metrics.handled_calls, metrics.talk_time_sec, metrics.missed_calls];
+        }
+        return [metrics.handled_calls, metrics.talk_time_sec];
       });
 
       lines.push([...baseRow, ...queueValues].join(','));
@@ -353,18 +366,20 @@ export default function AgentPerformanceReportPage() {
                   <SortIcon field="aht_sec" label="Avg Handle" />
                 </button>
               </th>
-              <th rowSpan={2} className="bg-gray-50 px-4 py-3 text-right">
-                <button
-                  onClick={() => handleSort('missed_calls')}
-                  className="flex items-center justify-end space-x-2 font-semibold text-gray-900 hover:text-gray-700"
-                >
-                  <SortIcon field="missed_calls" label="Missed" />
-                </button>
-              </th>
+              {canViewMissedCalls ? (
+                <th rowSpan={2} className="bg-gray-50 px-4 py-3 text-right">
+                  <button
+                    onClick={() => handleSort('missed_calls')}
+                    className="flex items-center justify-end space-x-2 font-semibold text-gray-900 hover:text-gray-700"
+                  >
+                    <SortIcon field="missed_calls" label="Missed" />
+                  </button>
+                </th>
+              ) : null}
               {queueColumns.map((queue) => (
                 <th
                   key={queue.queue_id}
-                  colSpan={3}
+                  colSpan={canViewMissedCalls ? 3 : 2}
                   className="border-l border-gray-200 bg-gray-50 px-4 py-3 text-center font-semibold text-gray-900"
                 >
                   {queue.queue_name}
@@ -384,11 +399,13 @@ export default function AgentPerformanceReportPage() {
                   >
                     Talk Time
                   </th>
-                  <th
-                    className="bg-gray-50 px-4 py-2 text-right text-sm font-semibold text-gray-700"
-                  >
-                    Missed
-                  </th>
+                  {canViewMissedCalls ? (
+                    <th
+                      className="bg-gray-50 px-4 py-2 text-right text-sm font-semibold text-gray-700"
+                    >
+                      Missed
+                    </th>
+                  ) : null}
                 </Fragment>
               ))}
             </tr>
@@ -396,7 +413,7 @@ export default function AgentPerformanceReportPage() {
           <tbody>
             {displayAgents.length === 0 && !loading ? (
               <tr>
-                <td colSpan={5 + queueColumns.length * 3} className="px-6 py-6 text-center text-gray-500">
+                <td colSpan={(canViewMissedCalls ? 5 : 4) + queueColumns.length * (canViewMissedCalls ? 3 : 2)} className="px-6 py-6 text-center text-gray-500">
                   No agents found for the selected filters.
                 </td>
               </tr>
@@ -411,7 +428,7 @@ export default function AgentPerformanceReportPage() {
                   <td className="px-4 py-3 text-right text-gray-900">
                     {formatSecondsToMmSs(agent.aht_sec)}
                   </td>
-                  <td className="px-4 py-3 text-right text-gray-900">{agent.missed_calls}</td>
+                  {canViewMissedCalls ? <td className="px-4 py-3 text-right text-gray-900">{agent.missed_calls}</td> : null}
                   {queueColumns.map((queue) => {
                     const metrics = getQueueMetrics(agent, queue.queue_id);
                     return (
@@ -422,9 +439,11 @@ export default function AgentPerformanceReportPage() {
                         <td className="px-4 py-3 text-right text-gray-900">
                           {formatSecondsToHms(metrics.talk_time_sec)}
                         </td>
-                        <td className="px-4 py-3 text-right text-gray-900">
-                          {metrics.missed_calls}
-                        </td>
+                        {canViewMissedCalls ? (
+                          <td className="px-4 py-3 text-right text-gray-900">
+                            {metrics.missed_calls}
+                          </td>
+                        ) : null}
                       </Fragment>
                     );
                   })}

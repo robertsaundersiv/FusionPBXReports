@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy import or_, desc
 from sqlalchemy.orm import Session, load_only
 
-from app.auth import get_current_user
+from app.auth import get_current_user, ROLE_SUPER_ADMIN
 from app.database import get_db
 from app.models import CDRRecord, Queue, Agent, Extension
 from app.utils.agent_performance_utils import (
@@ -19,6 +19,7 @@ from app.utils.agent_performance_utils import (
     normalize_agent_name,
     normalize_queue_name,
     get_call_key,
+    get_agent_interaction_key,
     is_handled,
     is_missed,
     is_excluded,
@@ -202,6 +203,10 @@ def resolve_queue_key(record: CDRRecord, queue_lookup: Dict[str, Queue]) -> Opti
     return {"queue_id": extension, "queue_name": extension}
 
 
+def can_view_agent_missed_calls(current_user: dict) -> bool:
+    return (current_user or {}).get("role") == ROLE_SUPER_ADMIN
+
+
 @router.get("/leaderboard")
 async def get_agent_leaderboard(
     start: Optional[datetime] = Query(None),
@@ -214,6 +219,7 @@ async def get_agent_leaderboard(
     db: Session = Depends(get_db),
 ):
     start_epoch, end_epoch = get_time_window(start, end)
+    show_missed_calls = can_view_agent_missed_calls(current_user)
     queue_ids = parse_csv_list(queues)
     agent_ids = parse_csv_list(agents)
     accessible_agent_ids = get_accessible_agent_identifiers(db, current_user)
@@ -255,8 +261,8 @@ async def get_agent_leaderboard(
         if not agent_id:
             continue
 
-        call_key = get_call_key(record)
-        if not call_key:
+        interaction_key = get_agent_interaction_key(record)
+        if not interaction_key:
             continue
 
         if agent_id not in fallback_agent_names:
@@ -264,10 +270,10 @@ async def get_agent_leaderboard(
 
         if is_handled(record):
             agent_bucket = handled_calls.setdefault(agent_id, {})
-            existing = agent_bucket.get(call_key)
-            agent_bucket[call_key] = choose_record(existing, record)
+            existing = agent_bucket.get(interaction_key)
+            agent_bucket[interaction_key] = choose_record(existing, record)
         elif is_missed(record):
-            missed_calls.setdefault(agent_id, set()).add(call_key)
+            missed_calls.setdefault(agent_id, set()).add(interaction_key)
 
     agents_payload = []
     for agent_id, calls in handled_calls.items():
@@ -285,7 +291,7 @@ async def get_agent_leaderboard(
         mos_samples = len(mos_values)
 
         missed_keys = missed_calls.get(agent_id, set())
-        missed_count = len([key for key in missed_keys if key not in calls])
+        missed_count = len([key for key in missed_keys if key not in calls]) if show_missed_calls else 0
 
         agent_name = agent_name_map.get(agent_id, fallback_agent_names.get(agent_id, agent_id))
 
@@ -306,6 +312,7 @@ async def get_agent_leaderboard(
     return {
         "start": datetime.fromtimestamp(start_epoch).isoformat(),
         "end": datetime.fromtimestamp(end_epoch).isoformat(),
+        "can_view_missed_calls": show_missed_calls,
         "agents": agents_payload,
     }
 
@@ -323,6 +330,7 @@ async def get_agent_trends(
     db: Session = Depends(get_db),
 ):
     start_epoch, end_epoch = get_time_window(start, end)
+    show_missed_calls = can_view_agent_missed_calls(current_user)
     queue_ids = parse_csv_list(queues)
     queue_name_map = build_queue_extension_map(db, queue_ids)
     queue_extensions = list(queue_name_map.keys())
@@ -353,8 +361,8 @@ async def get_agent_trends(
         if normalize_agent_id(record) != agent_id:
             continue
 
-        call_key = get_call_key(record)
-        if not call_key:
+        interaction_key = get_agent_interaction_key(record)
+        if not interaction_key:
             continue
 
         bucket_start = datetime.fromtimestamp(record.start_epoch)
@@ -363,10 +371,10 @@ async def get_agent_trends(
 
         if is_handled(record):
             bucket_map = buckets.setdefault(bucket_key, {})
-            existing = bucket_map.get(call_key)
-            bucket_map[call_key] = choose_record(existing, record)
+            existing = bucket_map.get(interaction_key)
+            bucket_map[interaction_key] = choose_record(existing, record)
         elif is_missed(record):
-            missed_buckets.setdefault(bucket_key, set()).add(call_key)
+            missed_buckets.setdefault(bucket_key, set()).add(interaction_key)
 
     payload = []
     for bucket_key in sorted(buckets.keys()):
@@ -378,7 +386,7 @@ async def get_agent_trends(
         mos_avg = (sum(mos_values) / len(mos_values)) if mos_values else None
 
         missed_keys = missed_buckets.get(bucket_key, set())
-        missed_count = len([key for key in missed_keys if key not in buckets[bucket_key]])
+        missed_count = len([key for key in missed_keys if key not in buckets[bucket_key]]) if show_missed_calls else 0
 
         payload.append({
             "bucket_start": bucket_key,
@@ -391,6 +399,7 @@ async def get_agent_trends(
 
     return {
         "agent_id": agent_id,
+        "can_view_missed_calls": show_missed_calls,
         "buckets": payload,
     }
 
@@ -407,6 +416,7 @@ async def get_agent_performance_report(
     db: Session = Depends(get_db),
 ):
     start_epoch, end_epoch = get_time_window(start, end)
+    show_missed_calls = can_view_agent_missed_calls(current_user)
     queue_ids = parse_csv_list(queues)
     agent_ids = parse_csv_list(agents)
     accessible_agent_ids = get_accessible_agent_identifiers(db, current_user)
@@ -451,8 +461,8 @@ async def get_agent_performance_report(
         if not agent_id:
             continue
 
-        call_key = get_call_key(record)
-        if not call_key:
+        interaction_key = get_agent_interaction_key(record)
+        if not interaction_key:
             continue
 
         if agent_id not in fallback_agent_names:
@@ -468,13 +478,13 @@ async def get_agent_performance_report(
 
         if is_handled(record):
             agent_bucket = handled_calls[agent_id]
-            agent_bucket[call_key] = choose_record(agent_bucket.get(call_key), record)
+            agent_bucket[interaction_key] = choose_record(agent_bucket.get(interaction_key), record)
 
             queue_bucket = handled_by_queue[agent_id][queue_id]
-            queue_bucket[call_key] = choose_record(queue_bucket.get(call_key), record)
+            queue_bucket[interaction_key] = choose_record(queue_bucket.get(interaction_key), record)
         elif is_missed(record):
-            missed_calls[agent_id].add(call_key)
-            missed_by_queue[agent_id][queue_id].add(call_key)
+            missed_calls[agent_id].add(interaction_key)
+            missed_by_queue[agent_id][queue_id].add(interaction_key)
 
     queue_payload = []
     for queue_extension, queue in sorted(queue_lookup.items(), key=lambda item: (item[1].name or "")):
@@ -498,7 +508,7 @@ async def get_agent_performance_report(
         aht_sec = (talk_time_sec / handled_count) if handled_count > 0 else None
 
         missed_keys = missed_calls.get(agent_id, set())
-        missed_count = len([key for key in missed_keys if key not in handled_calls.get(agent_id, {})])
+        missed_count = len([key for key in missed_keys if key not in handled_calls.get(agent_id, {})]) if show_missed_calls else 0
 
         queue_metrics = {}
         queue_keys = set(handled_by_queue.get(agent_id, {}).keys()) | set(missed_by_queue.get(agent_id, {}).keys())
@@ -509,7 +519,7 @@ async def get_agent_performance_report(
             queue_missed_keys = missed_by_queue[agent_id].get(queue_id, set())
             queue_missed_count = len([
                 key for key in queue_missed_keys if key not in handled_by_queue[agent_id][queue_id]
-            ])
+            ]) if show_missed_calls else 0
 
             queue_metrics[queue_id] = {
                 "handled_calls": queue_handled_count,
@@ -534,6 +544,7 @@ async def get_agent_performance_report(
     return {
         "start": datetime.fromtimestamp(start_epoch).isoformat(),
         "end": datetime.fromtimestamp(end_epoch).isoformat(),
+        "can_view_missed_calls": show_missed_calls,
         "queues": queue_payload,
         "agents": agents_payload,
     }
@@ -633,6 +644,7 @@ async def get_agent_calls(
     db: Session = Depends(get_db),
 ):
     start_epoch, end_epoch = get_time_window(start, end)
+    show_missed_calls = can_view_agent_missed_calls(current_user)
     queue_ids = parse_csv_list(queues)
     queue_name_map = build_queue_extension_map(db, queue_ids)
     queue_extensions = list(queue_name_map.keys())
@@ -676,7 +688,8 @@ async def get_agent_calls(
     for record in records:
         if exclude_deflects and is_excluded(record):
             continue
-        if missed_only and not is_missed(record):
+        is_record_missed = is_missed(record)
+        if missed_only and show_missed_calls and not is_record_missed:
             continue
         if agent_id and normalize_agent_id(record) != agent_id:
             continue
@@ -687,12 +700,17 @@ async def get_agent_calls(
 
     calls_payload = []
     for record in paged:
+        is_record_missed = is_missed(record)
+        result_value = "missed" if is_record_missed else ("answered" if is_handled(record) else "other")
+        if not show_missed_calls and result_value == "missed":
+            result_value = "other"
+
         calls_payload.append({
             "call_id": record.xml_cdr_uuid,
             "start_time": datetime.fromtimestamp(record.start_epoch).isoformat(),
             "queue": normalize_queue_name(record, queue_name_map),
             "caller_id": record.caller_id_number,
-            "result": "missed" if is_missed(record) else ("answered" if is_handled(record) else "other"),
+            "result": result_value,
             "talk_time_sec": record.billsec or 0,
             "aht_sec": record.billsec or 0,
             "mos": record.rtp_audio_in_mos,

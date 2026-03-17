@@ -34,6 +34,45 @@ function formatDurationLabel(totalSeconds: number) {
   return parts.join(', ');
 }
 
+function formatClockInTimeZone(date: Date, timeZone: string): string {
+  try {
+    return new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: true,
+      year: 'numeric',
+      month: 'short',
+      day: '2-digit',
+      weekday: 'short',
+    }).format(date);
+  } catch {
+    return date.toLocaleString();
+  }
+}
+
+function formatUtcOffsetLabel(date: Date, timeZone: string): string {
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      timeZoneName: 'shortOffset',
+    }).formatToParts(date);
+    const tzPart = parts.find((part) => part.type === 'timeZoneName')?.value;
+    if (tzPart && tzPart.startsWith('GMT')) {
+      const suffix = tzPart.replace('GMT', '');
+      if (!suffix) {
+        return 'UTC+00:00';
+      }
+      const normalized = /^[-+]\d{1,2}$/.test(suffix) ? `${suffix}:00` : suffix;
+      return `UTC${normalized}`;
+    }
+  } catch {
+    // Fall back to a generic UTC label below.
+  }
+  return 'UTC';
+}
+
 export default function ExecutiveOverview() {
   const { filters, updateDateRange, updateQueueIds, updateDirection } = useFilterStore();
   const [data, setData] = useState<ExecutiveOverviewData | null>(null);
@@ -41,6 +80,17 @@ export default function ExecutiveOverview() {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedDefinition, setSelectedDefinition] = useState<KPIMetric | null>(null);
+  const [currentTime, setCurrentTime] = useState(new Date());
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setCurrentTime(new Date());
+    }, 1000);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, []);
 
   // Load metadata once on mount
   useEffect(() => {
@@ -111,6 +161,17 @@ export default function ExecutiveOverview() {
       />
 
       <div className="p-6 space-y-6">
+        <div className="card flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">Executive Overview</h1>
+            <p className="text-sm text-gray-500">Current application time</p>
+          </div>
+          <div className="text-left sm:text-right">
+            <p className="text-2xl font-semibold text-gray-900">{formatClockInTimeZone(currentTime, filters.timezone)}</p>
+            <p className="text-xs uppercase tracking-wide text-gray-500">{filters.timezone} ({formatUtcOffsetLabel(currentTime, filters.timezone)})</p>
+          </div>
+        </div>
+
         {/* KPI Strip */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           <KPICard metric={data.offered} onDefinitionClick={() => setSelectedDefinition(data.offered)} />

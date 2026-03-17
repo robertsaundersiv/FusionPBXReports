@@ -354,3 +354,36 @@ class TestEdgeCases:
         
         # Only the first call should count as abandoned
         assert abandoned_count == 1
+
+    def test_user_busy_counts_as_queue_abandoned(self):
+        """
+        Test: USER_BUSY with no answer should still count as queue abandoned.
+        Expected: offered=1, answered=0, abandoned=1
+        """
+        now = int(datetime.utcnow().timestamp())
+
+        records = [
+            MockCDRRecord(
+                "busy-unanswered",
+                "sales@internal",
+                now,
+                cc_queue_answered_epoch=None,
+                billsec=0,
+                hangup_cause="USER_BUSY",
+                cc_queue_canceled_epoch=now + 20,
+            )
+        ]
+
+        has_answer = any(r.cc_queue_answered_epoch is not None for r in records)
+        assert has_answer is False
+
+        abandoned_count = 0
+        for record in records:
+            if (record.billsec or 0) != 0:
+                continue
+            if (record.hangup_cause in ("ORIGINATOR_CANCEL", "NO_ANSWER", "USER_BUSY") or
+                (getattr(record, "cc_cause", None) or "") == "TIMEOUT" or
+                (getattr(record, "call_disposition", None) or "") == "missed"):
+                abandoned_count += 1
+
+        assert abandoned_count == 1

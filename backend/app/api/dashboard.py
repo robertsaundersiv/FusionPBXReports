@@ -61,6 +61,24 @@ def local_timestamp_expr(epoch_column, timezone_name: str):
     return func.timezone(timezone_name, func.to_timestamp(epoch_column))
 
 
+def is_queue_entry_answered(records) -> bool:
+    """Return True when any record indicates the queue interaction was answered.
+
+    FusionPBX data can have answered interactions with missing
+    cc_queue_answered_epoch, so we also consider answer_epoch when the leg
+    ended as NORMAL_CLEARING.
+    """
+    for record in records:
+        if getattr(record, "cc_queue_answered_epoch", None) is not None:
+            return True
+
+        hangup_cause = (getattr(record, "hangup_cause", "") or "").upper()
+        if getattr(record, "answer_epoch", None) is not None and hangup_cause == "NORMAL_CLEARING":
+            return True
+
+    return False
+
+
 def get_accessible_agent_identifiers(db: Session, current_user: dict) -> Optional[Set[str]]:
     """Return allowed agent identifiers for the current user.
 
@@ -180,7 +198,7 @@ async def get_executive_overview(
         is a true abandoned call based on FusionPBX logic.
         """
         # If any record was answered, not abandoned
-        if any(r.cc_queue_answered_epoch is not None for r in records):
+        if is_queue_entry_answered(records):
             return False
         
         # Check if any record matches abandoned criteria
@@ -196,7 +214,7 @@ async def get_executive_overview(
                 continue
             
             # Must show caller-abandoned behavior
-            if (record.hangup_cause in ('ORIGINATOR_CANCEL', 'NO_ANSWER') or
+            if (record.hangup_cause in ('ORIGINATOR_CANCEL', 'NO_ANSWER', 'USER_BUSY') or
                 (getattr(record, 'cc_cause', None) or '') == 'TIMEOUT' or
                 (getattr(record, 'call_disposition', None) or '') == 'missed'):
                 return True
@@ -206,7 +224,7 @@ async def get_executive_overview(
     # Count outcomes
     total_offered_queue = len(unique_queue_entries)
     total_answered = sum(1 for records in unique_queue_entries.values() 
-                        if any(r.cc_queue_answered_epoch is not None for r in records))
+                        if is_queue_entry_answered(records))
     total_abandoned = sum(1 for records in unique_queue_entries.values()
                          if is_true_abandoned(records))
     
@@ -510,7 +528,7 @@ async def get_executive_overview(
     # Helper function to determine if a queue entry is truly abandoned (same as above)
     def is_true_abandoned_for_queue(records):
         # If any record was answered, not abandoned
-        if any(r.cc_queue_answered_epoch is not None for r in records):
+        if is_queue_entry_answered(records):
             return False
         
         # Check if any record matches abandoned criteria
@@ -526,7 +544,7 @@ async def get_executive_overview(
                 continue
             
             # Must show caller-abandoned behavior
-            if (record.hangup_cause in ('ORIGINATOR_CANCEL', 'NO_ANSWER') or
+            if (record.hangup_cause in ('ORIGINATOR_CANCEL', 'NO_ANSWER', 'USER_BUSY') or
                 (getattr(record, 'cc_cause', None) or '') == 'TIMEOUT' or
                 (getattr(record, 'call_disposition', None) or '') == 'missed'):
                 return True
@@ -545,7 +563,7 @@ async def get_executive_overview(
         queue_stats[cc_queue]['total'] += 1
         
         # Check if this entry was answered (any record has cc_queue_answered_epoch set)
-        if any(r.cc_queue_answered_epoch is not None for r in records):
+        if is_queue_entry_answered(records):
             queue_stats[cc_queue]['answered'] += 1
         elif is_true_abandoned_for_queue(records):
             queue_stats[cc_queue]['abandoned'] += 1
@@ -792,7 +810,7 @@ async def get_queue_performance(
         
         # Helper function to determine if a queue entry is truly abandoned
         def is_true_abandoned(records):
-            if any(r.cc_queue_answered_epoch is not None for r in records):
+            if is_queue_entry_answered(records):
                 return False
             for record in records:
                 if (record.billsec or 0) != 0:
@@ -801,7 +819,7 @@ async def get_queue_performance(
                     continue
                 if (record.hangup_cause or '') == 'BLIND_TRANSFER':
                     continue
-                if (record.hangup_cause in ('ORIGINATOR_CANCEL', 'NO_ANSWER') or
+                if (record.hangup_cause in ('ORIGINATOR_CANCEL', 'NO_ANSWER', 'USER_BUSY') or
                     (getattr(record, 'cc_cause', None) or '') == 'TIMEOUT' or
                     (getattr(record, 'call_disposition', None) or '') == 'missed'):
                     return True
@@ -810,7 +828,7 @@ async def get_queue_performance(
         # Count outcomes
         total_offered = len(unique_queue_entries)
         entry_is_answered = {
-            key: any(r.cc_queue_answered_epoch is not None for r in records)
+            key: is_queue_entry_answered(records)
             for key, records in unique_queue_entries.items()
         }
         entry_is_abandoned = {
@@ -972,7 +990,7 @@ async def get_queue_performance(
             
             # Count answered
             answered_count = sum(1 for records in bucket_entries.values() 
-                               if any(r.cc_queue_answered_epoch is not None for r in records))
+                               if is_queue_entry_answered(records))
             
             # Count abandoned
             abandoned_count = sum(1 for records in bucket_entries.values()
@@ -1147,7 +1165,7 @@ async def get_queue_performance_report(
     # ======================================================================
 
     def is_true_abandoned(records):
-        if any(r.cc_queue_answered_epoch is not None for r in records):
+        if is_queue_entry_answered(records):
             return False
 
         for record in records:
@@ -1157,7 +1175,7 @@ async def get_queue_performance_report(
                 continue
             if (record.hangup_cause or '') == 'BLIND_TRANSFER':
                 continue
-            if (record.hangup_cause in ('ORIGINATOR_CANCEL', 'NO_ANSWER') or
+            if (record.hangup_cause in ('ORIGINATOR_CANCEL', 'NO_ANSWER', 'USER_BUSY') or
                 (getattr(record, 'cc_cause', None) or '') == 'TIMEOUT' or
                 (getattr(record, 'call_disposition', None) or '') == 'missed'):
                 return True
@@ -1170,7 +1188,7 @@ async def get_queue_performance_report(
         # Count outcomes using unique queue entries
         offered = len(entry_map)
         answered = sum(1 for records in entry_map.values()
-                       if any(r.cc_queue_answered_epoch is not None for r in records))
+                       if is_queue_entry_answered(records))
         abandoned = sum(1 for records in entry_map.values() if is_true_abandoned(records))
 
         # ASA and service level calculations use answered records for the queue

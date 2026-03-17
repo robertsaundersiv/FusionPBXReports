@@ -145,6 +145,7 @@ export default function AgentPerformance() {
   const [callsData, setCallsData] = useState<AgentCallsResponse | null>(null);
   const [callDetail, setCallDetail] = useState<AgentCallDetail | null>(null);
   const [selectedMetric, setSelectedMetric] = useState<TrendMetric>('handled_calls');
+  const [canViewMissedCalls, setCanViewMissedCalls] = useState(false);
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
   const [sortField, setSortField] = useState<keyof AgentLeaderboardEntry>('handled_calls');
@@ -232,6 +233,7 @@ export default function AgentPerformance() {
       try {
         const leaderboardResponse = await agentPerformanceService.getLeaderboard(filters);
         setLeaderboard(leaderboardResponse);
+        setCanViewMissedCalls(Boolean(leaderboardResponse.can_view_missed_calls));
       } catch (error) {
         console.error('Error loading leaderboard:', error);
       } finally {
@@ -256,6 +258,9 @@ export default function AgentPerformance() {
           agentPerformanceService.getOutliers(filters, agentId, 'low_mos', 25),
         ]);
         setTrends(trendResponse);
+        if (trendResponse.can_view_missed_calls !== undefined) {
+          setCanViewMissedCalls(Boolean(trendResponse.can_view_missed_calls));
+        }
         setOutliersLong(longOutliers);
         setOutliersLow(lowOutliers);
       } catch (error) {
@@ -267,6 +272,15 @@ export default function AgentPerformance() {
 
     loadDetail();
   }, [filters, agentId, isDetailView]);
+
+  useEffect(() => {
+    if (!canViewMissedCalls && selectedMetric === 'missed_calls') {
+      setSelectedMetric('handled_calls');
+    }
+    if (!canViewMissedCalls && missedOnly) {
+      setMissedOnly(false);
+    }
+  }, [canViewMissedCalls, selectedMetric, missedOnly]);
 
   useEffect(() => {
     if (!isDetailView) {
@@ -381,6 +395,14 @@ export default function AgentPerformance() {
     }));
   }, [filledBuckets, selectedMetric]);
 
+  const visibleTrendMetrics = useMemo(() => {
+    const metrics: TrendMetric[] = ['handled_calls', 'talk_time_sec', 'aht_sec', 'mos_avg'];
+    if (canViewMissedCalls) {
+      metrics.push('missed_calls');
+    }
+    return metrics;
+  }, [canViewMissedCalls]);
+
   const exportLeaderboardCsv = () => {
     if (!leaderboard?.agents?.length) {
       return;
@@ -406,20 +428,28 @@ export default function AgentPerformance() {
       'AHT (sec)',
       'MOS Avg',
       'MOS Samples',
-      'Missed Calls',
     ];
+
+    if (canViewMissedCalls) {
+      header.push('Missed Calls');
+    }
 
     lines.push(header.map((column) => `"${column}"`).join(','));
 
-    const rows = sortedAgents.map((agent) => [
-      agent.agent_name,
-      agent.handled_calls,
-      agent.talk_time_sec,
-      agent.aht_sec ?? '',
-      agent.mos_avg ?? '',
-      agent.mos_samples ?? '',
-      agent.missed_calls,
-    ]);
+    const rows = sortedAgents.map((agent) => {
+      const row: Array<string | number> = [
+        agent.agent_name,
+        agent.handled_calls,
+        agent.talk_time_sec,
+        agent.aht_sec ?? '',
+        agent.mos_avg ?? '',
+        agent.mos_samples ?? '',
+      ];
+      if (canViewMissedCalls) {
+        row.push(agent.missed_calls);
+      }
+      return row;
+    });
 
     rows.forEach((row) => {
       lines.push(row.map(formatCsvValue).join(','));
@@ -538,9 +568,11 @@ export default function AgentPerformance() {
                     <th className="px-4 py-3 text-right cursor-pointer hover:bg-gray-100" onClick={() => handleSort('mos_avg')}>
                       MOS Avg <SortIndicator field="mos_avg" />
                     </th>
-                    <th className="px-4 py-3 text-right cursor-pointer hover:bg-gray-100" onClick={() => handleSort('missed_calls')}>
-                      Miss / No-answer <SortIndicator field="missed_calls" />
-                    </th>
+                    {canViewMissedCalls ? (
+                      <th className="px-4 py-3 text-right cursor-pointer hover:bg-gray-100" onClick={() => handleSort('missed_calls')}>
+                        Miss / No-answer <SortIndicator field="missed_calls" />
+                      </th>
+                    ) : null}
                   </tr>
                 </thead>
                 <tbody>
@@ -557,7 +589,7 @@ export default function AgentPerformance() {
                       <td className="px-4 py-3 text-right">
                         {agent.mos_samples > 0 ? `${agent.mos_avg.toFixed(2)} (${agent.mos_samples})` : 'N/A'}
                       </td>
-                      <td className="px-4 py-3 text-right">{agent.missed_calls}</td>
+                      {canViewMissedCalls ? <td className="px-4 py-3 text-right">{agent.missed_calls}</td> : null}
                     </tr>
                   ))}
                 </tbody>
@@ -612,10 +644,12 @@ export default function AgentPerformance() {
                   <p className="text-xs text-gray-400 mt-1">Samples: {selectedAgent.mos_samples}</p>
                 ) : null}
               </div>
-              <div className="kpi-card">
-                <p className="text-sm text-gray-600">Missed Calls</p>
-                <p className="text-2xl font-bold text-gray-900">{selectedAgent?.missed_calls ?? 0}</p>
-              </div>
+              {canViewMissedCalls ? (
+                <div className="kpi-card">
+                  <p className="text-sm text-gray-600">Missed Calls</p>
+                  <p className="text-2xl font-bold text-gray-900">{selectedAgent?.missed_calls ?? 0}</p>
+                </div>
+              ) : null}
             </div>
 
             <div className="card space-y-4">
@@ -626,9 +660,9 @@ export default function AgentPerformance() {
                   value={selectedMetric}
                   onChange={(e) => setSelectedMetric(e.target.value as TrendMetric)}
                 >
-                  {Object.keys(trendMetricLabels).map((metric) => (
+                  {visibleTrendMetrics.map((metric) => (
                     <option key={metric} value={metric}>
-                      {trendMetricLabels[metric as TrendMetric]}
+                      {trendMetricLabels[metric]}
                     </option>
                   ))}
                 </select>
@@ -739,17 +773,19 @@ export default function AgentPerformance() {
                     }}
                     className="px-3 py-2 border border-gray-300 rounded-md text-sm"
                   />
-                  <label className="flex items-center gap-2 text-sm text-gray-700">
-                    <input
-                      type="checkbox"
-                      checked={missedOnly}
-                      onChange={(e) => {
-                        setMissedOnly(e.target.checked);
-                        setCallPage(1);
-                      }}
-                    />
-                    Missed only
-                  </label>
+                  {canViewMissedCalls ? (
+                    <label className="flex items-center gap-2 text-sm text-gray-700">
+                      <input
+                        type="checkbox"
+                        checked={missedOnly}
+                        onChange={(e) => {
+                          setMissedOnly(e.target.checked);
+                          setCallPage(1);
+                        }}
+                      />
+                      Missed only
+                    </label>
+                  ) : null}
                 </div>
               </div>
 

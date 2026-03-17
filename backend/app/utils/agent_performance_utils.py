@@ -56,6 +56,26 @@ def get_call_key(cdr) -> Optional[str]:
     return getattr(cdr, "xml_cdr_uuid", None)
 
 
+def get_agent_interaction_key(cdr) -> Optional[str]:
+    """Return a stable key for one agent interaction.
+
+    Prefer queue-entry identity when available so multiple no-answer legs for the
+    same queue attempt collapse into one interaction.
+    """
+    caller_id = getattr(cdr, "caller_id_number", None)
+    queue_join_epoch = getattr(cdr, "cc_queue_joined_epoch", None)
+    cc_queue = getattr(cdr, "cc_queue", None) or ""
+    queue_extension = cc_queue.split("@", 1)[0] if "@" in cc_queue else cc_queue
+
+    if caller_id and queue_join_epoch and queue_extension:
+        return f"queue:{queue_extension}:{caller_id}:{queue_join_epoch}"
+
+    if caller_id and queue_join_epoch:
+        return f"queue:unknown:{caller_id}:{queue_join_epoch}"
+
+    return get_call_key(cdr)
+
+
 def _has_call_center_context(cdr) -> bool:
     return any(
         getattr(cdr, field, None)
@@ -87,11 +107,23 @@ def is_handled(cdr) -> bool:
     return bool(answered)
 
 
+def _is_agent_busy(cdr) -> bool:
+    """Return True when call outcome indicates the agent was already busy."""
+    hangup_cause = (getattr(cdr, "hangup_cause", "") or "").upper()
+    if hangup_cause == "USER_BUSY":
+        return True
+
+    sip_disposition = (getattr(cdr, "sip_hangup_disposition", "") or "").lower()
+    return sip_disposition in {"send_refuse", "recv_refuse"}
+
+
 def is_missed(cdr) -> bool:
     """Return True for agent-identified calls that were not answered by that agent."""
     if not normalize_agent_id(cdr):
         return False
     if is_handled(cdr):
+        return False
+    if _is_agent_busy(cdr):
         return False
 
     if getattr(cdr, "missed_call", False):
@@ -102,11 +134,11 @@ def is_missed(cdr) -> bool:
         return True
 
     hangup_cause = (getattr(cdr, "hangup_cause", "") or "").upper()
-    if hangup_cause in {"NO_ANSWER", "ORIGINATOR_CANCEL", "USER_BUSY"}:
+    if hangup_cause in {"NO_ANSWER", "ORIGINATOR_CANCEL"}:
         return True
 
     sip_disposition = (getattr(cdr, "sip_hangup_disposition", "") or "").lower()
-    if sip_disposition in {"send_refuse", "recv_refuse", "send_cancel", "recv_cancel"}:
+    if sip_disposition in {"send_cancel", "recv_cancel"}:
         return True
 
     if _has_call_center_context(cdr) and (getattr(cdr, "billsec", 0) or 0) == 0:

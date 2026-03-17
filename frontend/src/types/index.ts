@@ -281,6 +281,7 @@ export interface AgentLeaderboardEntry {
 export interface AgentLeaderboardResponse {
   start: string;
   end: string;
+  can_view_missed_calls?: boolean;
   agents: AgentLeaderboardEntry[];
 }
 
@@ -295,6 +296,7 @@ export interface AgentTrendBucket {
 
 export interface AgentTrendsResponse {
   agent_id: string;
+  can_view_missed_calls?: boolean;
   buckets: AgentTrendBucket[];
 }
 
@@ -386,6 +388,7 @@ export interface AgentPerformanceReportRow {
 export interface AgentPerformanceReportResponse {
   start: string;
   end: string;
+  can_view_missed_calls?: boolean;
   queues: Array<{ queue_id: string; queue_name: string }>;
   agents: AgentPerformanceReportRow[];
 }
