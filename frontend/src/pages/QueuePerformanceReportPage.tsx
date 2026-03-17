@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   ChevronUp,
   ChevronDown,
@@ -83,12 +83,7 @@ export default function QueuePerformanceReportPage() {
     loadMetadata();
   }, []);
 
-  // Load data when filters change
-  useEffect(() => {
-    loadData();
-  }, [filters]);
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     setLoading(true);
     setError(null);
 
@@ -103,7 +98,12 @@ export default function QueuePerformanceReportPage() {
       setError(err.message || 'Failed to load queue performance report');
       setLoading(false);
     }
-  };
+  }, [filters]);
+
+  // Load data when filters change
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   const handleRetry = () => {
     loadData();
@@ -215,13 +215,7 @@ export default function QueuePerformanceReportPage() {
     });
   };
 
-  const SortIcon = ({
-    field,
-    label,
-  }: {
-    field: SortField;
-    label: string;
-  }) => {
+  const renderSortLabel = (field: SortField, label: string) => {
     if (tableState.sortField !== field) {
       return <span className="text-gray-400">{label}</span>;
     }
@@ -395,7 +389,7 @@ export default function QueuePerformanceReportPage() {
                   onClick={() => handleSort('queue_name')}
                   className="flex items-center space-x-2 font-semibold text-gray-900 hover:text-gray-700"
                 >
-                  <SortIcon field="queue_name" label="Queue Name" />
+                  {renderSortLabel('queue_name', 'Queue Name')}
                 </button>
               </th>
               <th className="bg-gray-50 px-6 py-3 text-right">
@@ -403,7 +397,7 @@ export default function QueuePerformanceReportPage() {
                   onClick={() => handleSort('offered')}
                   className="flex items-center justify-end space-x-2 font-semibold text-gray-900 hover:text-gray-700"
                 >
-                  <SortIcon field="offered" label="Offered" />
+                  {renderSortLabel('offered', 'Offered')}
                 </button>
               </th>
               <th className="bg-gray-50 px-6 py-3 text-right">
@@ -411,7 +405,7 @@ export default function QueuePerformanceReportPage() {
                   onClick={() => handleSort('answered')}
                   className="flex items-center justify-end space-x-2 font-semibold text-gray-900 hover:text-gray-700"
                 >
-                  <SortIcon field="answered" label="Answered" />
+                  {renderSortLabel('answered', 'Answered')}
                 </button>
               </th>
               <th className="bg-gray-50 px-6 py-3 text-right">
@@ -419,7 +413,7 @@ export default function QueuePerformanceReportPage() {
                   onClick={() => handleSort('abandoned')}
                   className="flex items-center justify-end space-x-2 font-semibold text-gray-900 hover:text-gray-700"
                 >
-                  <SortIcon field="abandoned" label="Abandoned" />
+                  {renderSortLabel('abandoned', 'Abandoned')}
                 </button>
               </th>
               <th className="bg-gray-50 px-6 py-3 text-right">
@@ -427,7 +421,7 @@ export default function QueuePerformanceReportPage() {
                   onClick={() => handleSort('answer_rate')}
                   className="flex items-center justify-end space-x-2 font-semibold text-gray-900 hover:text-gray-700"
                 >
-                  <SortIcon field="answer_rate" label="Answer Rate (%)" />
+                  {renderSortLabel('answer_rate', 'Answer Rate (%)')}
                 </button>
               </th>
               <th className="bg-gray-50 px-6 py-3 text-right">
@@ -435,7 +429,7 @@ export default function QueuePerformanceReportPage() {
                   onClick={() => handleSort('service_level_30')}
                   className="flex items-center justify-end space-x-2 font-semibold text-gray-900 hover:text-gray-700"
                 >
-                  <SortIcon field="service_level_30" label="SL 30 (%)" />
+                  {renderSortLabel('service_level_30', 'SL 30 (%)')}
                 </button>
               </th>
               <th className="bg-gray-50 px-6 py-3 text-right">
@@ -443,7 +437,7 @@ export default function QueuePerformanceReportPage() {
                   onClick={() => handleSort('asa_sec')}
                   className="flex items-center justify-end space-x-2 font-semibold text-gray-900 hover:text-gray-700"
                 >
-                  <SortIcon field="asa_sec" label="ASA (sec)" />
+                  {renderSortLabel('asa_sec', 'ASA (sec)')}
                 </button>
               </th>
               <th className="bg-gray-50 px-6 py-3 text-right">
@@ -451,7 +445,7 @@ export default function QueuePerformanceReportPage() {
                   onClick={() => handleSort('aht_sec')}
                   className="flex items-center justify-end space-x-2 font-semibold text-gray-900 hover:text-gray-700"
                 >
-                  <SortIcon field="aht_sec" label="AHT (sec)" />
+                  {renderSortLabel('aht_sec', 'AHT (sec)')}
                 </button>
               </th>
             </tr>

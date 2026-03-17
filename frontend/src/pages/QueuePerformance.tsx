@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useFilterStore } from '../hooks/useFilterStore';
 import DashboardFilterBar from '../components/DashboardFilterBar';
 import QueuePerformanceCard from '../components/QueuePerformanceCard';
@@ -27,17 +27,7 @@ export default function QueuePerformance() {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
 
-  // Load data when filters change
-  useEffect(() => {
-    loadData();
-  }, [filters]);
-
-  // Load metadata on mount
-  useEffect(() => {
-    loadMetadata();
-  }, []);
-
-  const loadMetadata = async () => {
+  const loadMetadata = useCallback(async () => {
     try {
       const [queuesData, agentsData] = await Promise.all([
         dashboardService.getQueues(),
@@ -48,9 +38,9 @@ export default function QueuePerformance() {
     } catch (err) {
       console.error('Error loading metadata:', err);
     }
-  };
+  }, []);
 
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     setLoading(true);
     setError(null);
 
@@ -83,7 +73,17 @@ export default function QueuePerformance() {
       setError(err.message || 'Failed to load queue performance data');
       setLoading(false);
     }
-  };
+  }, [filters]);
+
+  // Load data when filters change
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  // Load metadata on mount
+  useEffect(() => {
+    loadMetadata();
+  }, [loadMetadata]);
 
   const handleRetry = () => {
     loadData();
@@ -94,16 +94,14 @@ export default function QueuePerformance() {
     if (!data || !data.queues || data.queues.length === 0) {
       return [];
     }
-    const groups = groupQueuesByPrefix(data.queues);
-    
-    // Auto-expand all groups by default on first load
-    if (expandedGroups.size === 0 && groups.length > 0) {
-      const allKeys = new Set(groups.map(g => g.groupKey));
-      setExpandedGroups(allKeys);
-    }
-    
-    return groups;
+    return groupQueuesByPrefix(data.queues);
   }, [data]);
+
+  useEffect(() => {
+    if (expandedGroups.size === 0 && groupedQueues.length > 0) {
+      setExpandedGroups(new Set(groupedQueues.map((g) => g.groupKey)));
+    }
+  }, [expandedGroups.size, groupedQueues]);
 
   const toggleGroup = (groupKey: string) => {
     const newExpanded = new Set(expandedGroups);

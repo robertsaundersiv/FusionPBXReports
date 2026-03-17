@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { ChevronDown, ChevronUp, Download, RefreshCw, Search } from 'lucide-react';
 import { useFilterStore } from '../hooks/useFilterStore';
 import DashboardFilterBar from '../components/DashboardFilterBar';
@@ -83,11 +83,7 @@ export default function AgentPerformanceReportPage() {
     updateAgentUuids([]);
   }, [updateAgentUuids]);
 
-  useEffect(() => {
-    loadData();
-  }, [filters]);
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     setLoading(true);
     setError(null);
 
@@ -100,7 +96,11 @@ export default function AgentPerformanceReportPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [filters]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   const handleFiltersChange = (newFilters: DashboardFilters) => {
     updateDateRange(newFilters.dateRange);

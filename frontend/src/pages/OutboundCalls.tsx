@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ChevronDown, ChevronUp, Search } from 'lucide-react';
 import { useFilterStore } from '../hooks/useFilterStore';
 import DashboardFilterBar from '../components/DashboardFilterBar';
@@ -69,11 +69,7 @@ export default function OutboundCalls() {
     updateAgentUuids([]);
   }, [updateAgentUuids]);
 
-  useEffect(() => {
-    loadData();
-  }, [filters]);
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     setLoading(true);
     setError(null);
 
@@ -86,7 +82,11 @@ export default function OutboundCalls() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [filters]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   const handleFiltersChange = (newFilters: DashboardFilters) => {
     updateDateRange(newFilters.dateRange);
