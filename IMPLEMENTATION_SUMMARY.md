@@ -159,7 +159,7 @@ worker/
    - Pre-compute hourly KPIs per queue
    - Enable fast dashboard queries
 
-5. **compute_daily_aggregates** (daily @ 2 AM UTC)
+5. **compute_daily_aggregates** (daily @ 6 AM UTC)
    - Pre-compute daily metrics per queue/agent
    - Generate trend data
 

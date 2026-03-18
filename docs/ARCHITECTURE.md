@@ -71,7 +71,7 @@
                │
                ├─► HourlyAggregate computed (every 15 min)
                │
-               └─► DailyAggregate computed (daily @ 2am)
+               └─► DailyAggregate computed (daily @ 6am UTC)
                    │
                    └─► Dashboard queries use aggregates
                        │
@@ -136,7 +136,7 @@ ScheduledReport Configuration:
   - `sync_queue_metadata` - hourly
   - `sync_agent_metadata` - hourly
   - `compute_hourly_aggregates` - every 15 minutes
-  - `compute_daily_aggregates` - daily @ 2am
+  - `compute_daily_aggregates` - daily @ 6am UTC
   - `generate_scheduled_reports` - configured schedule
 - **Idempotency**: All tasks safe for rerun
 

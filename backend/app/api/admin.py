@@ -40,7 +40,7 @@ TASK_METADATA = {
     },
     "app.tasks.compute_daily_aggregates": {
         "display_name": "Compute Daily Aggregates",
-        "schedule": "Daily at 2:00 AM UTC",
+        "schedule": "Daily at 6:00 AM UTC",
     },
 }
 

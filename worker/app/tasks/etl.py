@@ -769,7 +769,7 @@ def compute_hourly_aggregates():
 def compute_daily_aggregates():
     """
     Periodic task: Compute daily aggregates
-    Runs daily at 2 AM
+    Runs daily at 6 AM UTC
     """
     logger.info("Starting daily aggregate computation")
     try:
@@ -812,6 +812,6 @@ celery_app.conf.beat_schedule.update({
     },
     'compute-daily-aggregates': {
         'task': 'app.tasks.compute_daily_aggregates',
-        'schedule': crontab(hour=2, minute=0),
+        'schedule': crontab(hour=6, minute=0),
     },
 })
