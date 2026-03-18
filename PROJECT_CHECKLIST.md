@@ -147,7 +147,7 @@
 - [x] sync_queue_metadata (hourly)
 - [x] sync_agent_metadata (hourly)
 - [x] compute_hourly_aggregates (every 15 min)
-- [x] compute_daily_aggregates (daily @ 2am)
+- [x] compute_daily_aggregates (daily @ 6am UTC)
 - [x] generate_scheduled_reports (configurable)
 
 ### Task Scheduling

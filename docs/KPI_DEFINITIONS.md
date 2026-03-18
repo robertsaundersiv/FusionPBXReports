@@ -340,7 +340,7 @@ All KPIs support these filters:
 
 ### Update Frequency
 - **Hourly Aggregates**: Updated every 15 minutes
-- **Daily Aggregates**: Updated daily at 2 AM UTC
+- **Daily Aggregates**: Updated daily at 6 AM UTC
 - **Trends**: Derived from hourly aggregates
 
 ### Recalculation Windows

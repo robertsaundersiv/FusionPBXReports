@@ -73,7 +73,16 @@ def _is_postgres() -> bool:
     return bind.dialect.name == "postgresql"
 
 
+def _table_exists(table_name: str) -> bool:
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    return table_name in inspector.get_table_names()
+
+
 def upgrade() -> None:
+    if not _table_exists("cdr_records"):
+        return
+
     if _is_postgres():
         ctx = op.get_context()
         with ctx.autocommit_block():
@@ -105,6 +114,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    if not _table_exists("cdr_records"):
+        return
+
     if _is_postgres():
         ctx = op.get_context()
         with ctx.autocommit_block():
