@@ -1,9 +1,13 @@
 """
 API routes for dashboard data
 """
+import json
 import logging
+import os
 import re
+import redis
 from fastapi import APIRouter, Depends, Query, HTTPException
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy.orm import Session, load_only
 from sqlalchemy import func, Integer, case, desc, or_, cast, String
 from app.database import get_db
@@ -20,6 +24,11 @@ logger = logging.getLogger(__name__)
 
 
 WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+
+REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
+EXEC_OVERVIEW_CACHE_TTL = int(os.getenv("EXEC_OVERVIEW_CACHE_TTL", "60"))
+METADATA_CACHE_TTL = int(os.getenv("METADATA_CACHE_TTL", "300"))
+_redis_client = None
 
 QUEUE_ANALYTICS_COLUMNS = (
     CDRRecord.caller_id_number,
@@ -39,6 +48,54 @@ QUEUE_ANALYTICS_COLUMNS = (
 
 def optimize_queue_records_query(query):
     return query.options(load_only(*QUEUE_ANALYTICS_COLUMNS))
+
+
+def get_redis_client():
+    """Create a lazy Redis client for dashboard response caching."""
+    global _redis_client
+    if _redis_client is None:
+        _redis_client = redis.Redis.from_url(
+            REDIS_URL,
+            decode_responses=True,
+            socket_connect_timeout=1,
+            socket_timeout=1,
+        )
+    return _redis_client
+
+
+def cache_get_json(cache_key: str):
+    try:
+        value = get_redis_client().get(cache_key)
+        if not value:
+            return None
+        return json.loads(value)
+    except Exception:
+        return None
+
+
+def cache_set_json(cache_key: str, payload, ttl_seconds: int):
+    try:
+        encoded_payload = json.dumps(jsonable_encoder(payload))
+        get_redis_client().setex(cache_key, ttl_seconds, encoded_payload)
+    except Exception:
+        pass
+
+
+def build_exec_overview_cache_key(
+    start_epoch: int,
+    end_epoch: int,
+    queue_ids: Optional[List[str]],
+    direction: Optional[str],
+    timezone_name: str,
+) -> str:
+    queue_part = "all" if not queue_ids else ",".join(sorted(queue_ids))
+    direction_part = direction or "all"
+    timezone_part = timezone_name or "America/Phoenix"
+    # Bucket by minute so near-simultaneous users share cache entries.
+    return (
+        f"dashboard:exec:v1:{start_epoch // 60}:{end_epoch // 60}:"
+        f"{queue_part}:{direction_part}:{timezone_part}"
+    )
 
 
 def to_sunday_first_weekday_index(python_weekday: int) -> int:
@@ -138,8 +195,15 @@ async def get_visible_queues(
     db: Session = Depends(get_db),
 ):
     """Get queue metadata visible to current user"""
+    cache_key = "dashboard:metadata:queues-visible:v1"
+    cached_response = cache_get_json(cache_key)
+    if cached_response is not None:
+        return cached_response
+
     queues = db.query(Queue).order_by(Queue.name).all()
-    return queues
+    response_payload = jsonable_encoder(queues)
+    cache_set_json(cache_key, response_payload, METADATA_CACHE_TTL)
+    return response_payload
 
 
 @router.get("/agents-visible")
@@ -148,8 +212,15 @@ async def get_visible_agents(
     db: Session = Depends(get_db),
 ):
     """Get agent metadata visible to current user."""
+    cache_key = "dashboard:metadata:agents-visible:v1"
+    cached_response = cache_get_json(cache_key)
+    if cached_response is not None:
+        return cached_response
+
     agents = db.query(Agent).order_by(Agent.agent_name).all()
-    return agents
+    response_payload = jsonable_encoder(agents)
+    cache_set_json(cache_key, response_payload, METADATA_CACHE_TTL)
+    return response_payload
 
 
 @router.get("/executive-overview")
@@ -184,6 +255,17 @@ async def get_executive_overview(
     
     start_epoch = int(start_date.timestamp())
     end_epoch = int(end_date.timestamp())
+
+    cache_key = build_exec_overview_cache_key(
+        start_epoch=start_epoch,
+        end_epoch=end_epoch,
+        queue_ids=queue_ids,
+        direction=direction,
+        timezone_name=timezone,
+    )
+    cached_response = cache_get_json(cache_key)
+    if cached_response is not None:
+        return cached_response
     
     # Convert queue UUIDs to cc_queue identifiers (extension@context format)
     # Since queue_context may be NULL, we'll filter using just the extension part
@@ -634,7 +716,7 @@ async def get_executive_overview(
                 'callsAbandoned': abandoned
             })
     
-    return {
+    response_payload = {
         'offered': {
             'name': 'Total Offered',
             'value': total_offered_queue,
@@ -715,6 +797,9 @@ async def get_executive_overview(
             'lowestMosProviders': [],
         },
     }
+
+    cache_set_json(cache_key, response_payload, EXEC_OVERVIEW_CACHE_TTL)
+    return response_payload
 
 
 @router.get("/queue-performance/{queue_id}")
