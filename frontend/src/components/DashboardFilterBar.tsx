@@ -3,6 +3,37 @@ import { Filter } from 'lucide-react';
 import { endOfDay, format, startOfDay } from 'date-fns';
 import { dateUtils } from '../utils/formatters';
 
+function getBrowserTimeZone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/Phoenix';
+  } catch {
+    return 'America/Phoenix';
+  }
+}
+
+function getUtcDateRangeByPreset(preset: string): { startDate: Date; endDate: Date } {
+  const now = new Date();
+  const y = now.getUTCFullYear();
+  const m = now.getUTCMonth();
+  const d = now.getUTCDate();
+
+  const makeStart = (daysBack: number) => new Date(Date.UTC(y, m, d - daysBack, 0, 0, 0, 0));
+  const makeEnd = (daysBack: number) => new Date(Date.UTC(y, m, d - daysBack, 23, 59, 59, 999));
+
+  switch (preset) {
+    case 'today':
+      return { startDate: makeStart(0), endDate: makeEnd(0) };
+    case 'yesterday':
+      return { startDate: makeStart(1), endDate: makeEnd(1) };
+    case 'last_7':
+      return { startDate: makeStart(6), endDate: makeEnd(0) };
+    case 'last_30':
+      return { startDate: makeStart(29), endDate: makeEnd(0) };
+    default:
+      return { startDate: makeStart(0), endDate: makeEnd(0) };
+  }
+}
+
 interface DashboardFilterBarProps {
   filters: DashboardFilters;
   queues: Array<{ id: number; queue_id: string; name: string }>;
@@ -32,6 +63,11 @@ export default function DashboardFilterBar({
   showExcludeDeflectsToggle = false,
 }: DashboardFilterBarProps) {
   const datePresets = ['today', 'yesterday', 'last_7', 'last_30', 'custom'];
+  const localTimeZone = getBrowserTimeZone();
+  const isUtcMode = filters.timezone === 'UTC';
+
+  const getPresetDateRange = (preset: string) =>
+    isUtcMode ? getUtcDateRangeByPreset(preset) : dateUtils.getDateRangeByPreset(preset);
 
   // Sort agents alphabetically by name
   const sortedAgents = [...agents].sort((a, b) => 
@@ -53,7 +89,7 @@ export default function DashboardFilterBar({
       return;
     }
 
-    const { startDate, endDate } = dateUtils.getDateRangeByPreset(preset);
+    const { startDate, endDate } = getPresetDateRange(preset);
     onFiltersChange({
       ...filters,
       dateRange: {
@@ -70,18 +106,31 @@ export default function DashboardFilterBar({
     if (!value) return null;
     const [year, month, day] = value.split('-').map(Number);
     if (!year || !month || !day) return null;
+    if (isUtcMode) {
+      return new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0));
+    }
     return new Date(year, month - 1, day);
   };
+
+  const asStartOfSelectedDay = (date: Date) =>
+    isUtcMode
+      ? new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), 0, 0, 0, 0))
+      : startOfDay(date);
+
+  const asEndOfSelectedDay = (date: Date) =>
+    isUtcMode
+      ? new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), 23, 59, 59, 999))
+      : endOfDay(date);
 
   const handleCustomDateChange = (value: string, field: 'start' | 'end') => {
     const parsed = parseDateInputValue(value);
     if (!parsed) return;
 
     if (field === 'start') {
-      const newStart = startOfDay(parsed);
-      let newEnd = filters.dateRange.endDate ? endOfDay(filters.dateRange.endDate) : endOfDay(parsed);
+      const newStart = asStartOfSelectedDay(parsed);
+      let newEnd = filters.dateRange.endDate ? asEndOfSelectedDay(filters.dateRange.endDate) : asEndOfSelectedDay(parsed);
       if (newEnd < newStart) {
-        newEnd = endOfDay(parsed);
+        newEnd = asEndOfSelectedDay(parsed);
       }
       onFiltersChange({
         ...filters,
@@ -94,10 +143,10 @@ export default function DashboardFilterBar({
       return;
     }
 
-    const newEnd = endOfDay(parsed);
-    let newStart = filters.dateRange.startDate ? startOfDay(filters.dateRange.startDate) : startOfDay(parsed);
+    const newEnd = asEndOfSelectedDay(parsed);
+    let newStart = filters.dateRange.startDate ? asStartOfSelectedDay(filters.dateRange.startDate) : asStartOfSelectedDay(parsed);
     if (newStart > newEnd) {
-      newStart = startOfDay(parsed);
+      newStart = asStartOfSelectedDay(parsed);
     }
     onFiltersChange({
       ...filters,
@@ -107,6 +156,26 @@ export default function DashboardFilterBar({
         endDate: newEnd,
       },
     });
+  };
+
+  const handleTimezoneModeToggle = (useUtc: boolean) => {
+    const timezone = useUtc ? 'UTC' : localTimeZone;
+    const updatedFilters: DashboardFilters = {
+      ...filters,
+      timezone,
+    };
+
+    if (filters.dateRange.preset !== 'custom') {
+      const presetRange = useUtc
+        ? getUtcDateRangeByPreset(filters.dateRange.preset)
+        : dateUtils.getDateRangeByPreset(filters.dateRange.preset);
+      updatedFilters.dateRange = {
+        ...updatedFilters.dateRange,
+        ...presetRange,
+      };
+    }
+
+    onFiltersChange(updatedFilters);
   };
 
 
@@ -273,6 +342,20 @@ export default function DashboardFilterBar({
           )}
         </div>
       )}
+
+      <div className="flex flex-wrap items-center gap-3 text-sm text-gray-700">
+        <label className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={isUtcMode}
+            onChange={(e) => handleTimezoneModeToggle(e.target.checked)}
+          />
+          Use UTC timezone
+        </label>
+        <span className="text-xs text-gray-500">
+          Current: {filters.timezone}
+        </span>
+      </div>
     </div>
   );
 }

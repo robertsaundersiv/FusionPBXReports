@@ -51,6 +51,7 @@ export default function QueuePerformanceReportPage() {
     updateDateRange,
     updateQueueIds,
     updateDirection,
+    updateTimezone,
     updateExcludeDeflects,
   } = useFilterStore();
   const [data, setData] = useState<QueuePerformanceReportResponse | null>(null);
@@ -113,6 +114,7 @@ export default function QueuePerformanceReportPage() {
     updateDateRange(newFilters.dateRange);
     updateQueueIds(newFilters.queueIds);
     updateDirection(newFilters.direction);
+    updateTimezone(newFilters.timezone);
     updateExcludeDeflects(newFilters.excludeDeflects);
   };
 

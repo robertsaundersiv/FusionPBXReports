@@ -18,7 +18,7 @@ import type {
 import { ChevronDown, ChevronUp, AlertCircle, RefreshCw } from 'lucide-react';
 
 export default function QueuePerformance() {
-  const { filters, updateDateRange, updateQueueIds, updateDirection } = useFilterStore();
+  const { filters, updateDateRange, updateQueueIds, updateDirection, updateTimezone } = useFilterStore();
   const [data, setData] = useState<QueuePerformanceHourlyResponse | null>(null);
   const [queues, setQueues] = useState<Queue[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -135,6 +135,7 @@ export default function QueuePerformance() {
             updateDateRange(newFilters.dateRange);
             updateQueueIds(newFilters.queueIds);
             updateDirection(newFilters.direction);
+            updateTimezone(newFilters.timezone);
           }}
         />
         <div className="p-8 text-center">
@@ -157,6 +158,7 @@ export default function QueuePerformance() {
             updateDateRange(newFilters.dateRange);
             updateQueueIds(newFilters.queueIds);
             updateDirection(newFilters.direction);
+            updateTimezone(newFilters.timezone);
           }}
         />
         <div className="p-8">
@@ -191,6 +193,7 @@ export default function QueuePerformance() {
             updateDateRange(newFilters.dateRange);
             updateQueueIds(newFilters.queueIds);
             updateDirection(newFilters.direction);
+            updateTimezone(newFilters.timezone);
           }}
         />
         <div className="p-8">
@@ -217,6 +220,7 @@ export default function QueuePerformance() {
           updateDateRange(newFilters.dateRange);
           updateQueueIds(newFilters.queueIds);
           updateDirection(newFilters.direction);
+          updateTimezone(newFilters.timezone);
         }}
       />
 

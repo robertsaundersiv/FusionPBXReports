@@ -45,6 +45,7 @@ export default function AgentPerformanceReportPage() {
     updateDateRange,
     updateQueueIds,
     updateAgentUuids,
+    updateTimezone,
     updateIncludeOutbound,
     updateExcludeDeflects,
   } = useFilterStore();
@@ -108,6 +109,7 @@ export default function AgentPerformanceReportPage() {
     updateDateRange(newFilters.dateRange);
     updateQueueIds(newFilters.queueIds);
     updateAgentUuids(newFilters.agentUuids);
+    updateTimezone(newFilters.timezone);
     updateIncludeOutbound(newFilters.includeOutbound);
     updateExcludeDeflects(newFilters.excludeDeflects);
   };

@@ -74,7 +74,7 @@ function formatUtcOffsetLabel(date: Date, timeZone: string): string {
 }
 
 export default function ExecutiveOverview() {
-  const { filters, updateDateRange, updateQueueIds, updateDirection } = useFilterStore();
+  const { filters, updateDateRange, updateQueueIds, updateDirection, updateTimezone } = useFilterStore();
   const [data, setData] = useState<ExecutiveOverviewData | null>(null);
   const [queues, setQueues] = useState<Queue[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -156,6 +156,7 @@ export default function ExecutiveOverview() {
           updateDateRange(newFilters.dateRange);
           updateQueueIds(newFilters.queueIds);
           updateDirection(newFilters.direction);
+          updateTimezone(newFilters.timezone);
           
         }}
       />

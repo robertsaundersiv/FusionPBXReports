@@ -15,7 +15,7 @@ interface TableState {
 }
 
 export default function RepeatCallers() {
-  const { filters, updateDateRange, updateQueueIds, updateDirection } = useFilterStore();
+  const { filters, updateDateRange, updateQueueIds, updateDirection, updateTimezone } = useFilterStore();
   const [data, setData] = useState<RepeatCallersResponse | null>(null);
   const [queues, setQueues] = useState<Queue[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -67,6 +67,7 @@ export default function RepeatCallers() {
     updateDateRange(newFilters.dateRange);
     updateQueueIds(newFilters.queueIds);
     updateDirection(newFilters.direction);
+    updateTimezone(newFilters.timezone);
   };
 
   const displayRows = useMemo(() => {

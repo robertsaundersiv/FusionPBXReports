@@ -15,6 +15,7 @@ interface FilterStore {
   updateDateRange: (range: DateRange) => void;
   updateQueueIds: (queueIds: string[]) => void;
   updateAgentUuids: (agentUuids: string[]) => void;
+  updateTimezone: (timezone: string) => void;
   updateDirection: (direction?: 'inbound' | 'outbound' | 'local') => void;
   updateBusinessHoursOnly: (businessHoursOnly: boolean) => void;
   updateIncludeOutbound: (includeOutbound: boolean) => void;
@@ -59,6 +60,14 @@ export const useFilterStore = create<FilterStore>((set) => ({
       filters: {
         ...state.filters,
         agentUuids,
+      },
+    })),
+
+  updateTimezone: (timezone: string) =>
+    set((state) => ({
+      filters: {
+        ...state.filters,
+        timezone,
       },
     })),
 

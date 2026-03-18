@@ -1,6 +1,7 @@
 """
 API routes for dashboard data
 """
+import logging
 import re
 from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.orm import Session, load_only
@@ -15,6 +16,7 @@ from typing import List, Optional, Set
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 router = APIRouter(prefix="/api/v1/dashboard", tags=["dashboard"])
+logger = logging.getLogger(__name__)
 
 
 WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
@@ -77,6 +79,49 @@ def is_queue_entry_answered(records) -> bool:
             return True
 
     return False
+
+
+def get_queue_entry_asa_seconds(records) -> Optional[float]:
+    """Return queue wait time for an answered entry, if derivable."""
+    waits = []
+    for record in records:
+        joined_epoch = getattr(record, "cc_queue_joined_epoch", None)
+        if joined_epoch is None:
+            continue
+
+        queue_answered_epoch = getattr(record, "cc_queue_answered_epoch", None)
+        if queue_answered_epoch is not None:
+            waits.append(queue_answered_epoch - joined_epoch)
+            continue
+
+        hangup_cause = (getattr(record, "hangup_cause", "") or "").upper()
+        answer_epoch = getattr(record, "answer_epoch", None)
+        if answer_epoch is not None and hangup_cause == "NORMAL_CLEARING":
+            waits.append(answer_epoch - joined_epoch)
+
+    if not waits:
+        return None
+
+    # Keep the shortest valid wait across legs for this queue entry.
+    return max(0, min(waits))
+
+
+def get_queue_entry_aht_seconds(records) -> Optional[float]:
+    """Return AHT contribution for an answered queue entry."""
+    if not is_queue_entry_answered(records):
+        return None
+
+    durations = [
+        (getattr(record, "billsec", 0) or 0) + (getattr(record, "hold_accum_seconds", 0) or 0)
+        for record in records
+        if ((getattr(record, "billsec", 0) or 0) > 0) or ((getattr(record, "hold_accum_seconds", 0) or 0) > 0)
+    ]
+
+    if not durations:
+        return 0.0
+
+    # Use max leg duration to avoid double-counting transferred multi-leg calls.
+    return float(max(durations))
 
 
 def get_accessible_agent_identifiers(db: Session, current_user: dict) -> Optional[Set[str]]:
@@ -231,31 +276,33 @@ async def get_executive_overview(
     # Verify counts add up
     other = total_offered_queue - total_answered - total_abandoned
     if other > 0:
-        print(f"WARNING: {other} calls are neither answered nor abandoned (may have no queue data)")
-    
-    print(f"Total queue entries: {total_offered_queue} (answered: {total_answered}, abandoned: {total_abandoned})")
+        logger.warning(
+            "Queue analytics found uncategorized entries",
+            extra={
+                "offered": total_offered_queue,
+                "answered": total_answered,
+                "abandoned": total_abandoned,
+                "other": other,
+            },
+        )
     
     answer_rate = (total_answered / total_offered_queue * 100) if total_offered_queue > 0 else 0
     abandon_rate = (total_abandoned / total_offered_queue * 100) if total_offered_queue > 0 else 0
     
-    print(f"Calculated answer_rate: {answer_rate}%")
-    print(f"Calculated abandon_rate: {abandon_rate}%")
-    print(f"Sum: {answer_rate + abandon_rate}%")
-    
-    # Core aggregates (DB-side for performance)
-    avg_asa = base_query.filter(
-        CDRRecord.cc_queue_answered_epoch.isnot(None),
-        CDRRecord.cc_queue_joined_epoch.isnot(None),
-    ).with_entities(
-        func.avg(CDRRecord.cc_queue_answered_epoch - CDRRecord.cc_queue_joined_epoch)
-    ).scalar() or 0
+    # Core aggregates aligned to answered queue-entry classification.
+    answered_entry_records = [records for records in unique_queue_entries.values() if is_queue_entry_answered(records)]
 
-    avg_aht = base_query.filter(
-        CDRRecord.cc_queue_answered_epoch.isnot(None),
-        CDRRecord.cc_queue_joined_epoch.isnot(None),
-    ).with_entities(
-        func.avg(CDRRecord.billsec)
-    ).scalar() or 0
+    entry_asa_times = [
+        asa for asa in (get_queue_entry_asa_seconds(records) for records in answered_entry_records)
+        if asa is not None
+    ]
+    avg_asa = (sum(entry_asa_times) / len(entry_asa_times)) if entry_asa_times else 0
+
+    entry_aht_times = [
+        aht for aht in (get_queue_entry_aht_seconds(records) for records in answered_entry_records)
+        if aht is not None
+    ]
+    avg_aht = (sum(entry_aht_times) / len(entry_aht_times)) if entry_aht_times else 0
 
     avg_mos = base_query.filter(
         CDRRecord.rtp_audio_in_mos > 0,
@@ -267,21 +314,10 @@ async def get_executive_overview(
         func.coalesce(func.sum(CDRRecord.billsec), 0)
     ).scalar() or 0
 
-    # Service level (default 30s)
+    # Service level (default 30s) aligned to answered entry ASA denominator.
     threshold = 30
-    service_level_total = base_query.filter(
-        CDRRecord.cc_queue_answered_epoch.isnot(None),
-        CDRRecord.cc_queue_joined_epoch.isnot(None),
-    ).with_entities(
-        func.count()
-    ).scalar() or 0
-    service_level_within = base_query.filter(
-        CDRRecord.cc_queue_answered_epoch.isnot(None),
-        CDRRecord.cc_queue_joined_epoch.isnot(None),
-        (CDRRecord.cc_queue_answered_epoch - CDRRecord.cc_queue_joined_epoch) <= threshold,
-    ).with_entities(
-        func.count()
-    ).scalar() or 0
+    service_level_total = len(entry_asa_times)
+    service_level_within = sum(1 for value in entry_asa_times if value <= threshold)
     service_level = (service_level_within / service_level_total * 100) if service_level_total > 0 else 0
     
     # Get trend data (daily) - count unique queue entries by (caller, join_epoch)
@@ -841,24 +877,28 @@ async def get_queue_performance(
         answer_rate = (total_answered / total_offered * 100) if total_offered > 0 else 0
         abandon_rate = (total_abandoned / total_offered * 100) if total_offered > 0 else 0
         
-        # ASA calculations
-        asa_records = [r for r in queue_records if r.cc_queue_answered_epoch and r.cc_queue_joined_epoch]
-        asa_times = [r.cc_queue_answered_epoch - r.cc_queue_joined_epoch for r in asa_records]
+        # ASA calculations (entry-based, aligned to answered-entry logic)
+        asa_times = [
+            asa for asa in (get_queue_entry_asa_seconds(records) for records in unique_queue_entries.values())
+            if asa is not None
+        ]
         avg_asa = sum(asa_times) / len(asa_times) if asa_times else 0
         asa_p90 = sorted(asa_times)[int(len(asa_times) * 0.9)] if asa_times else 0
         
-        # AHT calculations
-        answered_records = [r for r in queue_records if r.cc_queue_answered_epoch]
-        aht_times = [r.billsec + (r.hold_accum_seconds or 0) for r in answered_records]
+        # AHT calculations (entry-based, aligned to answered-entry logic)
+        aht_times = [
+            aht for aht in (get_queue_entry_aht_seconds(records) for records in unique_queue_entries.values())
+            if aht is not None
+        ]
         avg_aht = sum(aht_times) / len(aht_times) if aht_times else 0
         aht_p90 = sorted(aht_times)[int(len(aht_times) * 0.9)] if aht_times else 0
         
         # Service level (default 30s)
         service_level = 0
-        if asa_records:
+        if asa_times:
             threshold = 30
             within_threshold = sum(1 for time in asa_times if time <= threshold)
-            service_level = (within_threshold / len(asa_records) * 100)
+            service_level = (within_threshold / len(asa_times) * 100)
         
         # MOS calculations
         mos_records = [r for r in queue_records if r.rtp_audio_in_mos and r.rtp_audio_in_mos > 0]
@@ -996,9 +1036,11 @@ async def get_queue_performance(
             abandoned_count = sum(1 for records in bucket_entries.values()
                                 if is_true_abandoned(records))
             
-            # Service level
-            hour_asa_records = [r for r in bucket_records if r.cc_queue_answered_epoch and r.cc_queue_joined_epoch]
-            hour_asa_times = [r.cc_queue_answered_epoch - r.cc_queue_joined_epoch for r in hour_asa_records]
+            # Service level / ASA use entry-level answered waits.
+            hour_asa_times = [
+                asa for asa in (get_queue_entry_asa_seconds(records) for records in bucket_entries.values())
+                if asa is not None
+            ]
             
             hour_service_level = 0
             if hour_asa_times:
@@ -1008,9 +1050,11 @@ async def get_queue_performance(
             # ASA
             hour_asa = sum(hour_asa_times) / len(hour_asa_times) if hour_asa_times else None
             
-            # AHT
-            hour_answered_records = [r for r in bucket_records if r.cc_queue_answered_epoch]
-            hour_aht_times = [r.billsec + (r.hold_accum_seconds or 0) for r in hour_answered_records]
+            # AHT uses entry-level answered durations.
+            hour_aht_times = [
+                aht for aht in (get_queue_entry_aht_seconds(records) for records in bucket_entries.values())
+                if aht is not None
+            ]
             hour_aht = sum(hour_aht_times) / len(hour_aht_times) if hour_aht_times else None
             
             # MOS
@@ -1072,6 +1116,7 @@ async def get_queue_performance_report(
     queue_ids: Optional[List[str]] = Query(None),
     direction: Optional[str] = Query(None),
     exclude_deflects: bool = Query(True),
+    timezone: str = Query("America/Phoenix"),
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -1089,26 +1134,24 @@ async def get_queue_performance_report(
     """
     
     # Default to last 7 days if not specified
+    user_timezone = get_requested_timezone(timezone)
     if not end_date:
-        end_date = datetime.now(dt_timezone.utc)
+        end_date = datetime.now(user_timezone)
     if not start_date:
         start_date = end_date - timedelta(days=7)
+
+    start_date = ensure_utc_datetime(start_date)
+    end_date = ensure_utc_datetime(end_date)
     
     start_epoch = int(start_date.timestamp())
     # Set end_epoch to end of day (23:59:59) to include full last day
     end_epoch = int((end_date.replace(hour=23, minute=59, second=59)).timestamp())
-    
-    print(f"=== Queue Performance Report ===")
-    print(f"Start epoch: {start_epoch}, End epoch: {end_epoch}")
-    print(f"Queue IDs filter: {queue_ids}")
-    print(f"Exclude deflects: {exclude_deflects}")
     
     # Convert queue UUIDs to cc_queue identifiers (extension@context format)
     queue_extensions = None
     if queue_ids:
         queues = db.query(Queue).filter(Queue.queue_id.in_(queue_ids)).all()
         queue_extensions = [q.queue_extension for q in queues if q.queue_extension]
-        print(f"Converted to queue extensions: {queue_extensions}")
     else:
         queues = db.query(Queue).all()
 
@@ -1135,7 +1178,6 @@ async def get_queue_performance_report(
         base_query = base_query.filter(CDRRecord.direction == direction)
 
     queue_records = base_query.all()
-    print(f"Total CDR records with queue joins: {len(queue_records)}")
 
     # ======================================================================
     # STEP 2: Group by queue entry (caller + join time) per queue extension
@@ -1191,20 +1233,20 @@ async def get_queue_performance_report(
                        if is_queue_entry_answered(records))
         abandoned = sum(1 for records in entry_map.values() if is_true_abandoned(records))
 
-        # ASA and service level calculations use answered records for the queue
-        queue_records_for_extension = queue_records_by_extension.get(extension, [])
-        asa_records = [
-            r for r in queue_records_for_extension
-            if r.cc_queue_answered_epoch and r.cc_queue_joined_epoch
+        # ASA and service level use answered queue entries (not raw record rows).
+        asa_times = [
+            asa for asa in (get_queue_entry_asa_seconds(records) for records in entry_map.values())
+            if asa is not None
         ]
-        asa_times = [r.cc_queue_answered_epoch - r.cc_queue_joined_epoch for r in asa_records]
         service_level_count = sum(1 for t in asa_times if t <= 30)
         service_level_30 = (service_level_count / len(asa_times) * 100) if asa_times else 0
         asa_sec = sum(asa_times) / len(asa_times) if asa_times else 0
 
-        # AHT calculations use answered records for the queue
-        answered_records = [r for r in queue_records_for_extension if r.cc_queue_answered_epoch]
-        aht_times = [r.billsec + (r.hold_accum_seconds or 0) for r in answered_records]
+        # AHT uses answered queue entries (not raw record rows).
+        aht_times = [
+            aht for aht in (get_queue_entry_aht_seconds(records) for records in entry_map.values())
+            if aht is not None
+        ]
         aht_sec = sum(aht_times) / len(aht_times) if aht_times else 0
 
         queue_obj = queue_by_extension.get(extension)

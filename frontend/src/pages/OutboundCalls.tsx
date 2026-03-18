@@ -34,7 +34,7 @@ const formatCsvValue = (value: string | number | null | undefined): string => {
 };
 
 export default function OutboundCalls() {
-  const { filters, updateDateRange, updateQueueIds, updateAgentUuids } = useFilterStore();
+  const { filters, updateDateRange, updateQueueIds, updateAgentUuids, updateTimezone } = useFilterStore();
   const [data, setData] = useState<OutboundCallsResponse | null>(null);
   const [queues, setQueues] = useState<any[]>([]);
   const [agents, setAgents] = useState<any[]>([]);
@@ -91,6 +91,7 @@ export default function OutboundCalls() {
   const handleFiltersChange = (newFilters: DashboardFilters) => {
     updateDateRange(newFilters.dateRange);
     updateQueueIds(newFilters.queueIds);
+    updateTimezone(newFilters.timezone);
   };
 
   // Display rows for "By User" table

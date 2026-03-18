@@ -148,6 +148,10 @@ export const dashboardService = {
     if (filters.direction) {
       params.direction = filters.direction;
     }
+
+    if (filters.timezone) {
+      params.timezone = filters.timezone;
+    }
     
     const response = await apiClient.get('/api/v1/dashboard/queue-performance-report', {
       params,
