@@ -63,7 +63,7 @@ services:
       - ./backend:/app
     networks:
       - analytics-network
-    command: sh -c "python -m alembic upgrade head && python -m scripts.seed && (python -m scripts.sync_metadata_only || true) && (python -m scripts.sync_extensions || true) && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    command: sh -c "python -m alembic upgrade head && python -m scripts.seed && (python -m scripts.sync_metadata_only || true) && (python -m scripts.sync_extensions || true) && uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4"
 
   worker:
     build:
@@ -90,7 +90,7 @@ services:
       - ./worker:/app
     networks:
       - analytics-network
-    command: celery -A app.celery_app worker --loglevel=info --concurrency=2
+    command: celery -A app.celery_app worker --loglevel=info --concurrency=4
 
   celery-beat:
     build:
@@ -122,16 +122,10 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
     container_name: fpbx-analytics-frontend
-    environment:
-      VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
     depends_on:
       - backend
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
     networks:
       - analytics-network
-    command: npm run dev
 
   nginx:
     image: nginx:alpine

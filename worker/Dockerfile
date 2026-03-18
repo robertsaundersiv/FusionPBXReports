@@ -22,4 +22,4 @@ RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
 USER appuser
 
 # Run Celery worker
-CMD ["celery", "-A", "app.celery_app", "worker", "--loglevel=info", "--concurrency=2"]
+CMD ["celery", "-A", "app.celery_app", "worker", "--loglevel=info", "--concurrency=4"]

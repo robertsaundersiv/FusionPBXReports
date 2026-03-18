@@ -4,7 +4,6 @@ Database configuration and session management
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
-from sqlalchemy.pool import NullPool
 from contextlib import contextmanager
 import os
 import logging
@@ -31,7 +30,9 @@ for attempt in range(max_retries):
     try:
         engine = create_engine(
             DATABASE_URL,
-            poolclass=NullPool,
+            pool_size=10,
+            max_overflow=20,
+            pool_pre_ping=True,
             echo=False,
         )
         # Test connection - use text() for SQLAlchemy 2.0+
