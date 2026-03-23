@@ -121,6 +121,9 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        VITE_APP_GIT_SHA: ${GIT_COMMIT:-unknown}
+        VITE_APP_BUILD_TIME: ${BUILD_TIMESTAMP:-unknown}
     container_name: fpbx-analytics-frontend
     depends_on:
       - backend

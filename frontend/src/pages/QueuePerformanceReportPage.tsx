@@ -344,7 +344,7 @@ export default function QueuePerformanceReportPage() {
           showAgents={false}
           showDirection={false}
           showOutboundToggle={false}
-          showExcludeDeflectsToggle={true}
+          showExcludeDeflectsToggle={false}
         />
       </div>
 

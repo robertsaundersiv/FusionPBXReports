@@ -49,6 +49,7 @@ interface DashboardFilterBarProps {
   showDirection?: boolean;
   showOutboundToggle?: boolean;
   showExcludeDeflectsToggle?: boolean;
+  outboundBadgeText?: string;
 }
 
 export default function DashboardFilterBar({
@@ -61,6 +62,7 @@ export default function DashboardFilterBar({
   showDirection = true,
   showOutboundToggle = false,
   showExcludeDeflectsToggle = false,
+  outboundBadgeText,
 }: DashboardFilterBarProps) {
   const datePresets = ['today', 'yesterday', 'last_7', 'last_30', 'custom'];
   const localTimeZone = getBrowserTimeZone();
@@ -321,14 +323,21 @@ export default function DashboardFilterBar({
       {(showOutboundToggle || showExcludeDeflectsToggle) && (
         <div className="flex flex-wrap gap-4">
           {showOutboundToggle && (
-            <label className="flex items-center gap-2 text-sm text-gray-700">
-              <input
-                type="checkbox"
-                checked={filters.includeOutbound}
-                onChange={(e) => onFiltersChange({ ...filters, includeOutbound: e.target.checked })}
-              />
-              Include outbound
-            </label>
+            <div className="relative flex items-center gap-2">
+              <label className="flex items-center gap-2 text-sm text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={filters.includeOutbound}
+                  onChange={(e) => onFiltersChange({ ...filters, includeOutbound: e.target.checked })}
+                />
+                Include outbound
+              </label>
+              {filters.includeOutbound && outboundBadgeText && (
+                <span className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700 shadow-sm">
+                  {outboundBadgeText}
+                </span>
+              )}
+            </div>
           )}
           {showExcludeDeflectsToggle && (
             <label className="flex items-center gap-2 text-sm text-gray-700">

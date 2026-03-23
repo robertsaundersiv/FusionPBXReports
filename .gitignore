@@ -75,3 +75,15 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
+
+# Local debugging artifacts (do not commit)
+backend/scripts/check_apply_common_filters.py
+backend/scripts/check_window_counts.py
+backend/scripts/debug_alias_collision.py
+backend/scripts/debug_badge.py
+backend/scripts/debug_joshua_aliases.py
+backend/scripts/debug_joshua_columns.py
+backend/scripts/debug_joshua_filters.py
+backend/scripts/invoke_leaderboard_window.py
+backend/scripts/test_leaderboard_outbound.py
+debug_outbound_result.txt

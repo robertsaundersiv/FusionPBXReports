@@ -278,11 +278,31 @@ export interface AgentLeaderboardEntry {
   missed_calls: number;
 }
 
+export interface AgentAttributionDiagnostics {
+  total_records: number;
+  attributed_records: number;
+  unknown_records: number;
+  unknown_rate_pct: number;
+  attribution_sources: {
+    cc_agent: number;
+    cc_agent_uuid: number;
+    extension_uuid: number;
+    caller_number: number;
+    caller_name_exact: number;
+    caller_name_extension: number;
+    caller_name_fuzzy: number;
+    raw_fallback: number;
+  };
+}
+
 export interface AgentLeaderboardResponse {
   start: string;
   end: string;
   can_view_missed_calls?: boolean;
+  can_view_attribution_diagnostics?: boolean;
+  attribution_diagnostics?: AgentAttributionDiagnostics;
   agents: AgentLeaderboardEntry[];
+  outbound_added_calls?: number;
 }
 
 export interface AgentTrendBucket {

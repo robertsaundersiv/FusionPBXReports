@@ -29,7 +29,30 @@ function formatTaskStatus(value: string) {
   return value;
 }
 
+function formatBuildTimestamp(value: string | undefined) {
+  if (!value || value === 'unknown') {
+    return 'Unknown';
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+
+  return parsed.toLocaleString('en-US', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+}
+
 export default function QualityHealth() {
+  const runningCommit = import.meta.env.VITE_APP_GIT_SHA || 'unknown';
+  const runningUpdatedAt = formatBuildTimestamp(import.meta.env.VITE_APP_BUILD_TIME);
+
   const [data, setData] = useState<QualityHealthData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -83,6 +106,9 @@ export default function QualityHealth() {
       <div>
         <h1 className="text-3xl font-bold text-gray-900">Quality & Health</h1>
         <p className="mt-2 text-sm text-gray-600">Super admin operational visibility for ETL state and Celery task execution.</p>
+        <p className="mt-1 text-xs text-gray-500">
+          Running build: {runningCommit} | Updated: {runningUpdatedAt}
+        </p>
       </div>
 
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">

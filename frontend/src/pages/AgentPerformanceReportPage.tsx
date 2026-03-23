@@ -55,6 +55,7 @@ export default function AgentPerformanceReportPage() {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [outboundAddedCalls, setOutboundAddedCalls] = useState<number | null>(null);
   const [tableState, setTableState] = useState<TableState>({
     sortField: 'handled_calls',
     sortOrder: 'desc',
@@ -91,11 +92,22 @@ export default function AgentPerformanceReportPage() {
     setError(null);
 
     try {
-      const response = await agentPerformanceService.getReport(filters);
-      setData(response);
+      if (filters.includeOutbound) {
+        const [reportResponse, leaderboardResponse] = await Promise.all([
+          agentPerformanceService.getReport(filters),
+          agentPerformanceService.getLeaderboard(filters),
+        ]);
+        setData(reportResponse);
+        setOutboundAddedCalls(leaderboardResponse.outbound_added_calls ?? 0);
+      } else {
+        const response = await agentPerformanceService.getReport(filters);
+        setData(response);
+        setOutboundAddedCalls(null);
+      }
     } catch (err: any) {
       console.error('Error loading agent performance report:', err);
       setError(err.message || 'Failed to load agent performance report');
+      setOutboundAddedCalls(null);
     } finally {
       setLoading(false);
     }
@@ -300,7 +312,12 @@ export default function AgentPerformanceReportPage() {
           showAgents={true}
           showDirection={false}
           showOutboundToggle={true}
-          showExcludeDeflectsToggle={true}
+          showExcludeDeflectsToggle={false}
+          outboundBadgeText={
+            outboundAddedCalls !== null
+              ? `+${outboundAddedCalls.toLocaleString()} attributed calls`
+              : undefined
+          }
         />
       </div>
 

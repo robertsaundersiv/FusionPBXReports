@@ -120,6 +120,13 @@ const fillMissingAgentBuckets = (
   );
 };
 
+const formatAttributionLabel = (key: string): string => {
+  return key
+    .split('_')
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+};
+
 export default function AgentPerformance() {
   const { agentId } = useParams();
   const navigate = useNavigate();
@@ -155,6 +162,7 @@ export default function AgentPerformance() {
   const [hangupCauseFilter, setHangupCauseFilter] = useState('');
   const [missedOnly, setMissedOnly] = useState(false);
   const [callPage, setCallPage] = useState(1);
+  const [outboundAddedCalls, setOutboundAddedCalls] = useState<number | null>(null);
   const callLimit = 25;
 
   const isDetailView = Boolean(agentId);
@@ -233,10 +241,17 @@ export default function AgentPerformance() {
       setLoading(true);
       try {
         const leaderboardResponse = await agentPerformanceService.getLeaderboard(filters);
+        if (filters.includeOutbound) {
+          setOutboundAddedCalls(leaderboardResponse.outbound_added_calls ?? 0);
+        } else {
+          setOutboundAddedCalls(null);
+        }
+
         setLeaderboard(leaderboardResponse);
         setCanViewMissedCalls(Boolean(leaderboardResponse.can_view_missed_calls));
       } catch (error) {
         console.error('Error loading leaderboard:', error);
+        setOutboundAddedCalls(null);
       } finally {
         setLoading(false);
       }
@@ -405,6 +420,9 @@ export default function AgentPerformance() {
     return metrics;
   }, [canViewMissedCalls]);
 
+  const attributionDiagnostics = leaderboard?.attribution_diagnostics;
+  const canViewAttributionDiagnostics = Boolean(leaderboard?.can_view_attribution_diagnostics);
+
   const exportLeaderboardCsv = () => {
     if (!leaderboard?.agents?.length) {
       return;
@@ -524,10 +542,51 @@ export default function AgentPerformance() {
         showAgents={true}
         showDirection={false}
         showOutboundToggle={true}
-        showExcludeDeflectsToggle={true}
+        showExcludeDeflectsToggle={false}
+        outboundBadgeText={
+          outboundAddedCalls !== null
+            ? `+${outboundAddedCalls.toLocaleString()} attributed calls`
+            : undefined
+        }
       />
 
       <div className="p-6 space-y-6">
+        {canViewAttributionDiagnostics && attributionDiagnostics ? (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="text-sm font-semibold text-amber-900">Outbound Attribution Diagnostics</h2>
+              <span className="text-xs font-medium text-amber-800">
+                Unknown rate: {attributionDiagnostics.unknown_rate_pct.toFixed(2)}%
+              </span>
+            </div>
+            <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
+              <div className="rounded-md bg-white/80 p-2 border border-amber-100">
+                <div className="text-amber-700">Records considered</div>
+                <div className="text-lg font-semibold text-amber-900">{attributionDiagnostics.total_records.toLocaleString()}</div>
+              </div>
+              <div className="rounded-md bg-white/80 p-2 border border-amber-100">
+                <div className="text-amber-700">Attributed</div>
+                <div className="text-lg font-semibold text-amber-900">{attributionDiagnostics.attributed_records.toLocaleString()}</div>
+              </div>
+              <div className="rounded-md bg-white/80 p-2 border border-amber-100">
+                <div className="text-amber-700">Unknown</div>
+                <div className="text-lg font-semibold text-amber-900">{attributionDiagnostics.unknown_records.toLocaleString()}</div>
+              </div>
+            </div>
+            <div className="mt-3">
+              <p className="text-xs font-medium text-amber-800 mb-2">Attribution sources</p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
+                {Object.entries(attributionDiagnostics.attribution_sources).map(([source, count]) => (
+                  <div key={source} className="rounded-md bg-white/80 p-2 border border-amber-100">
+                    <div className="text-xs text-amber-700">{formatAttributionLabel(source)}</div>
+                    <div className="text-sm font-semibold text-amber-900">{count.toLocaleString()}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        ) : null}
+
         {!isDetailView && (
           <>
             <div className="flex items-center justify-between">

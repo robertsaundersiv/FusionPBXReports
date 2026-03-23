@@ -94,8 +94,19 @@ def is_handled(cdr) -> bool:
     """Return True when a call center interaction was answered by an agent."""
     if not normalize_agent_id(cdr):
         return False
+
+    # Outbound calls often do not include call-center fields. When agent
+    # attribution is available, treat answered outbound legs as handled.
+    direction = (getattr(cdr, "direction", "") or "").lower()
     if not _has_call_center_context(cdr):
+        if direction == "outbound":
+            return bool(
+                getattr(cdr, "answer_epoch", None)
+                or (getattr(cdr, "billsec", 0) or 0) > 0
+                or getattr(cdr, "status", "") == "answered"
+            )
         return False
+
     answered = any(
         (
             getattr(cdr, "cc_queue_answered_epoch", None),
