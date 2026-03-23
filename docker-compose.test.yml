@@ -1,0 +1,43 @@
+services:
+  test-db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: phonereports_test
+      POSTGRES_USER: phonereports_user
+      POSTGRES_PASSWORD: phonereports_pass
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U phonereports_user -d phonereports_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  test-redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  backend-tests:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        INSTALL_DEV: "true"
+    environment:
+      DB_HOST: test-db
+      DB_NAME: phonereports_test
+      DB_USER: phonereports_user
+      DB_PASSWORD: phonereports_pass
+      REDIS_URL: redis://test-redis:6379/0
+      FUSIONPBX_HOST: http://localhost
+      FUSIONPBX_API_KEY: test-api-key
+      BACKEND_LOG_FILE: /tmp/backend-test.log
+    depends_on:
+      test-db:
+        condition: service_healthy
+      test-redis:
+        condition: service_healthy
+    working_dir: /app
+    command: ["pytest", "tests", "-q"]

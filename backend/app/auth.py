@@ -102,7 +102,7 @@ def verify_token(token: str) -> dict:
         )
 
 
-async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
+def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
     """Get current user from JWT token with caching optimization"""
     token = credentials.credentials
     payload = verify_token(token)
@@ -166,7 +166,7 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         db.close()
 
 
-async def get_current_admin(current_user: dict = Depends(get_current_user)) -> dict:
+def get_current_admin(current_user: dict = Depends(get_current_user)) -> dict:
     """Get current user and verify admin or super_admin role"""
     role = current_user.get("role")
     if role not in {ROLE_ADMIN, ROLE_SUPER_ADMIN}:
@@ -177,7 +177,7 @@ async def get_current_admin(current_user: dict = Depends(get_current_user)) -> d
     return current_user
 
 
-async def get_current_super_admin(current_user: dict = Depends(get_current_user)) -> dict:
+def get_current_super_admin(current_user: dict = Depends(get_current_user)) -> dict:
     """Get current user and verify super_admin role"""
     role = current_user.get("role")
     if role != ROLE_SUPER_ADMIN:
@@ -188,7 +188,7 @@ async def get_current_super_admin(current_user: dict = Depends(get_current_user)
     return current_user
 
 
-async def get_current_operator(current_user: dict = Depends(get_current_user)) -> dict:
+def get_current_operator(current_user: dict = Depends(get_current_user)) -> dict:
     """Get current user and verify operator role"""
     role = current_user.get("role")
     if role != ROLE_OPERATOR:

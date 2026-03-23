@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import logging
+import os
 
 from app.database import engine, Base
 from app.api import auth, cdr, dashboard, admin, agent_performance
@@ -15,11 +16,15 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Additional file logging for easy retrieval when docker logs interface is limited
-file_handler = logging.FileHandler('/app/backend.log')
-file_handler.setLevel(logging.INFO)
-file_formatter = logging.Formatter('%(asctime)s %(levelname)s %(name)s %(message)s')
-file_handler.setFormatter(file_formatter)
-logging.getLogger().addHandler(file_handler)
+log_file_path = os.getenv("BACKEND_LOG_FILE", "/app/backend.log")
+try:
+    file_handler = logging.FileHandler(log_file_path)
+    file_handler.setLevel(logging.INFO)
+    file_formatter = logging.Formatter('%(asctime)s %(levelname)s %(name)s %(message)s')
+    file_handler.setFormatter(file_formatter)
+    logging.getLogger().addHandler(file_handler)
+except OSError:
+    logger.warning("File logging is disabled because log path is not writable: %s", log_file_path)
 
 
 @asynccontextmanager

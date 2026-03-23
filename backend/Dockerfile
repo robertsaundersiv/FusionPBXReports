@@ -2,6 +2,8 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+ARG INSTALL_DEV=false
+
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     gcc \
@@ -10,10 +12,13 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements
-COPY requirements.txt .
+COPY requirements.txt requirements-dev.txt* ./
 
 # Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt && \
+        if [ "$INSTALL_DEV" = "true" ] && [ -f requirements-dev.txt ]; then \
+            pip install --no-cache-dir -r requirements-dev.txt; \
+        fi
 
 # Copy application
 COPY . .

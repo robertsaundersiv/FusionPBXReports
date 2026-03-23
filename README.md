@@ -114,6 +114,23 @@ Notes:
 - Metadata sync scripts are run in non-blocking mode at container startup (app still boots if FusionPBX is temporarily unreachable)
 - Default login is whatever `ADMIN_USERNAME` / `ADMIN_PASSWORD` are set to in `.env`
 
+## Testing
+
+Run backend unit tests quickly in your local environment:
+
+```bash
+pytest backend/tests -q
+```
+
+Run backend tests in Linux containers with Postgres and Redis (recommended before deploy):
+
+```bash
+docker compose -f docker-compose.test.yml up --build --abort-on-container-exit --exit-code-from backend-tests
+docker compose -f docker-compose.test.yml down -v
+```
+
+For full details, see [docs/TESTING_ENVIRONMENT.md](docs/TESTING_ENVIRONMENT.md).
+
 ## Architecture
 
 ### Backend (FastAPI)
@@ -165,6 +182,12 @@ REDIS_URL=redis://redis:6379/0
 
 # JWT
 JWT_SECRET=your_secret_key
+
+# Login protection
+AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS=60
+AUTH_LOGIN_RATE_LIMIT_MAX_ATTEMPTS=120
+AUTH_LOGIN_LOCKOUT_THRESHOLD=5
+AUTH_LOGIN_LOCKOUT_SECONDS=300
 
 # Frontend
 VITE_API_URL=http://localhost:8000
