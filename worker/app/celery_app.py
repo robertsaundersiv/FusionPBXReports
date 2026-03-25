@@ -25,6 +25,12 @@ celery_app.conf.update(
     task_track_started=True,
     task_time_limit=30 * 60,  # 30 minutes
     task_soft_time_limit=25 * 60,  # 25 minutes
+    # Recycle worker child processes after 50 tasks to prevent gradual
+    # heap fragmentation / memory growth in long-running workers.
+    worker_max_tasks_per_child=50,
+    # Expire stored task results after 1 hour to prevent Redis/backend
+    # memory accumulation from result set growth.
+    result_expires=3600,
 )
 
 # Auto-discover tasks

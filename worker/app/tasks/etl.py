@@ -6,6 +6,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from celery import shared_task
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy import text
 
 from app.celery_app import celery_app
 from app.clients.fusionpbx import get_fusion_client
@@ -195,10 +196,9 @@ async def _sync_recent_cdr_records(lookback_minutes: int = 5, batch_size: int = 
                 # Commit remaining records from this batch
                 db.commit()
 
-                # Resolve outbound attribution: for B-leg records that have
-                # originating_leg_uuid but no extension_uuid, look up the
-                # A-leg and copy its extension_uuid so agent reports are accurate.
-                _resolve_outbound_attribution(db)
+                # Release all ORM objects loaded this batch from the session
+                # identity map so they can be garbage-collected between batches.
+                db.expunge_all()
 
                 total_synced += batch_synced
                 total_skipped += batch_skipped
@@ -213,6 +213,11 @@ async def _sync_recent_cdr_records(lookback_minutes: int = 5, batch_size: int = 
                 # Move to next batch
                 offset += batch_size
             
+            # Resolve outbound attribution once after all batches are committed.
+            # Running this inside the loop would re-load the full unresolved set
+            # on every iteration, growing unboundedly as the DB grows.
+            _resolve_outbound_attribution(db)
+
             logger.info(f"CDR sync complete: {total_synced} new records, {total_skipped} skipped")
             return {
                 "status": "success",
@@ -239,36 +244,24 @@ def _resolve_outbound_attribution(db) -> int:
     Without this resolution the B-leg always shows as "Unknown" in reports.
     Returns the number of records updated.
     """
-    # Find outbound B-legs that are missing extension_uuid but have
-    # originating_leg_uuid populated.
-    b_legs = (
-        db.query(CDRRecord)
-        .filter(
-            CDRRecord.direction == "outbound",
-            CDRRecord.extension_uuid.is_(None),
-            CDRRecord.originating_leg_uuid.isnot(None),
+    # Single SQL UPDATE...FROM: copies extension_uuid from the matching A-leg
+    # (local direction) to every outbound B-leg that is missing it.
+    # No CDRRecord ORM objects are loaded into Python RAM at all — this
+    # previously deserialised every unresolved row on every CDR sync cycle,
+    # causing steady memory growth proportional to DB size.
+    result = db.execute(
+        text(
+            "UPDATE cdr_records AS b "
+            "SET extension_uuid = a.extension_uuid "
+            "FROM cdr_records AS a "
+            "WHERE b.direction = 'outbound' "
+            "  AND b.extension_uuid IS NULL "
+            "  AND b.originating_leg_uuid IS NOT NULL "
+            "  AND a.xml_cdr_uuid = b.originating_leg_uuid "
+            "  AND a.extension_uuid IS NOT NULL"
         )
-        .all()
     )
-
-    if not b_legs:
-        return 0
-
-    # Build a set of originating UUIDs to fetch in one query.
-    orig_uuids = {r.originating_leg_uuid for r in b_legs}
-    a_legs = (
-        db.query(CDRRecord)
-        .filter(CDRRecord.xml_cdr_uuid.in_(orig_uuids))
-        .all()
-    )
-    a_leg_map = {r.xml_cdr_uuid: r for r in a_legs}
-
-    updated = 0
-    for b in b_legs:
-        a = a_leg_map.get(b.originating_leg_uuid)
-        if a and a.extension_uuid:
-            b.extension_uuid = a.extension_uuid
-            updated += 1
+    updated = result.rowcount
 
     if updated:
         db.commit()
@@ -523,29 +516,27 @@ def cleanup_old_cdr_records(retention_days: int = 31):
             
             if records_to_delete > 0:
                 logger.info(f"Found {records_to_delete} records to delete")
-                
-                # Delete in batches to avoid locking the table for too long
+
+                # Delete in batches using a pure-SQL subquery so no ORM objects
+                # are ever loaded into Python RAM — avoids the per-row
+                # deserialization that was the main source of memory growth here.
                 batch_size = 1000
                 deleted_count = 0
-                
+
                 while True:
-                    # Get batch of records to delete
-                    batch = db.query(CDRRecord).filter(
-                        CDRRecord.insert_date < cutoff_date
-                    ).limit(batch_size).all()
-                    
-                    if not batch:
-                        break
-                    
-                    batch_ids = [record.id for record in batch]
-                    deleted_in_batch = db.query(CDRRecord).filter(
-                        CDRRecord.id.in_(batch_ids)
-                    ).delete(synchronize_session=False)
-                    
+                    result = db.execute(
+                        text(
+                            "DELETE FROM cdr_records WHERE id IN "
+                            "(SELECT id FROM cdr_records WHERE insert_date < :cutoff LIMIT :batch)"
+                        ),
+                        {"cutoff": cutoff_date, "batch": batch_size},
+                    )
                     db.commit()
-                    deleted_count += deleted_in_batch
-                    
-                    logger.debug(f"Deleted batch of {deleted_in_batch} records. Total: {deleted_count}")
+                    rows = result.rowcount
+                    if rows == 0:
+                        break
+                    deleted_count += rows
+                    logger.debug(f"Deleted batch of {rows} records. Total: {deleted_count}")
                 
                 logger.info(f"✓ Cleanup complete: deleted {deleted_count} records")
                 return {
