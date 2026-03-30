@@ -1,5 +1,6 @@
+import { useMemo, useState } from 'react';
 import { DashboardFilters } from '../types';
-import { Filter } from 'lucide-react';
+import { Filter, Search } from 'lucide-react';
 import { endOfDay, format, startOfDay } from 'date-fns';
 import { dateUtils } from '../utils/formatters';
 
@@ -49,6 +50,7 @@ interface DashboardFilterBarProps {
   showDirection?: boolean;
   showOutboundToggle?: boolean;
   showExcludeDeflectsToggle?: boolean;
+  showStrictQueueAnsweredToggle?: boolean;
   outboundBadgeText?: string;
 }
 
@@ -62,18 +64,34 @@ export default function DashboardFilterBar({
   showDirection = true,
   showOutboundToggle = false,
   showExcludeDeflectsToggle = false,
+  showStrictQueueAnsweredToggle = false,
   outboundBadgeText,
 }: DashboardFilterBarProps) {
   const datePresets = ['today', 'yesterday', 'last_7', 'last_30', 'custom'];
   const localTimeZone = getBrowserTimeZone();
   const isUtcMode = filters.timezone === 'UTC';
+  const [agentSearchTerm, setAgentSearchTerm] = useState('');
 
   const getPresetDateRange = (preset: string) =>
     isUtcMode ? getUtcDateRangeByPreset(preset) : dateUtils.getDateRangeByPreset(preset);
 
-  // Sort agents alphabetically by name
-  const sortedAgents = [...agents].sort((a, b) => 
-    a.agent_name.localeCompare(b.agent_name)
+  const normalizedAgentSearchTerm = agentSearchTerm.trim().toLowerCase();
+
+  const sortedAgents = useMemo(
+    () => [...agents].sort((a, b) => a.agent_name.localeCompare(b.agent_name)),
+    [agents]
+  );
+
+  const filteredAgents = useMemo(
+    () =>
+      sortedAgents.filter((agent) => {
+        if (!normalizedAgentSearchTerm) {
+          return true;
+        }
+
+        return agent.agent_name.toLowerCase().includes(normalizedAgentSearchTerm);
+      }),
+    [normalizedAgentSearchTerm, sortedAgents]
   );
 
   const handleDatePresetChange = (preset: string) => {
@@ -264,17 +282,44 @@ export default function DashboardFilterBar({
             <label className="block text-sm font-medium text-gray-700">
               Agents {filters.agentUuids.length > 0 && `(${filters.agentUuids.length} selected)`}
             </label>
+            <label className="block text-xs font-medium uppercase tracking-wide text-gray-500">
+              Find agent in list
+            </label>
+            <div className="relative">
+              <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input
+                type="text"
+                value={agentSearchTerm}
+                onChange={(e) => setAgentSearchTerm(e.target.value)}
+                placeholder="Type an agent name to filter the list"
+                aria-label="Search agents list"
+                autoComplete="off"
+                className="w-full rounded-lg border border-gray-300 py-2 pl-9 pr-3 text-sm"
+              />
+            </div>
             <select
               multiple
               size={4}
               value={filters.agentUuids}
               onChange={(e) => {
-                const selected = Array.from(e.target.selectedOptions, (option) => option.value);
-                onFiltersChange({ ...filters, agentUuids: selected });
+                const visibleSelected = Array.from(e.target.selectedOptions, (option) => option.value);
+                // Build set of values currently visible in the filtered list
+                const visibleValueSet = new Set(
+                  filteredAgents
+                    .map((a) =>
+                      a.agent_uuid ||
+                      (a.agent_id !== undefined ? String(a.agent_id) : undefined) ||
+                      (a.id !== undefined ? String(a.id) : undefined)
+                    )
+                    .filter(Boolean) as string[]
+                );
+                // Keep selections for agents hidden by the current search term
+                const hiddenSelected = filters.agentUuids.filter((id) => !visibleValueSet.has(id));
+                onFiltersChange({ ...filters, agentUuids: [...hiddenSelected, ...visibleSelected] });
               }}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
             >
-              {sortedAgents
+              {filteredAgents
                 .map((agent, index) => {
                   const agentValue =
                     agent.agent_uuid ||
@@ -293,7 +338,10 @@ export default function DashboardFilterBar({
                 })
                 .filter(Boolean)}
             </select>
-            <p className="text-xs text-gray-500">Hold Ctrl/Cmd to select multiple. None = All agents</p>
+            <p className="text-xs text-gray-500">
+              Hold Ctrl/Cmd to select multiple. None = All agents
+              {normalizedAgentSearchTerm ? ` • ${filteredAgents.length} match${filteredAgents.length === 1 ? '' : 'es'}` : ''}
+            </p>
           </div>
         )}
 
@@ -320,7 +368,7 @@ export default function DashboardFilterBar({
         )}
       </div>
 
-      {(showOutboundToggle || showExcludeDeflectsToggle) && (
+      {(showOutboundToggle || showExcludeDeflectsToggle || showStrictQueueAnsweredToggle) && (
         <div className="flex flex-wrap gap-4">
           {showOutboundToggle && (
             <div className="relative flex items-center gap-2">
@@ -347,6 +395,16 @@ export default function DashboardFilterBar({
                 onChange={(e) => onFiltersChange({ ...filters, excludeDeflects: e.target.checked })}
               />
               Exclude voicemail/external deflects
+            </label>
+          )}
+          {showStrictQueueAnsweredToggle && (
+            <label className="flex items-center gap-2 text-sm text-gray-700">
+              <input
+                type="checkbox"
+                checked={filters.strictQueueAnswered}
+                onChange={(e) => onFiltersChange({ ...filters, strictQueueAnswered: e.target.checked })}
+              />
+              Strict queue answered mode
             </label>
           )}
         </div>

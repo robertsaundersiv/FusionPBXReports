@@ -65,6 +65,10 @@ export const dashboardService = {
 
   async getQueuePerformance(filters: DashboardFilters, queueIds?: string[]) {
     const params = formatFiltersForAPI(filters);
+
+    if (filters.strictQueueAnswered) {
+      params.strict_answered = true;
+    }
     
     // If specific queue IDs are provided for comparison, use those instead of filter queue IDs
     if (queueIds && queueIds.length > 0) {
@@ -151,6 +155,10 @@ export const dashboardService = {
 
     if (filters.timezone) {
       params.timezone = filters.timezone;
+    }
+
+    if (filters.strictQueueAnswered) {
+      params.strict_answered = true;
     }
     
     const response = await apiClient.get('/api/v1/dashboard/queue-performance-report', {

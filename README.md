@@ -200,6 +200,11 @@ LOG_LEVEL=INFO
 ENVIRONMENT=development
 ```
 
+### Calculations & Toggle Reference
+
+For a full human-readable explanation of every metric formula and every filter toggle, see **[docs/CALCULATIONS.docx](docs/CALCULATIONS.docx)**.
+The document covers queue deduplication logic, standard vs. strict answered mode, ASA/AHT derivation, agent attribution, abandoned classification, and all filter toggle behaviors.
+
 ### KPI Definitions
 
 KPI calculations are defined in [backend/app/kpi_definitions.py](backend/app/kpi_definitions.py) as a single source of truth used across ETL and API:

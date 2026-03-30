@@ -20,6 +20,7 @@ interface FilterStore {
   updateBusinessHoursOnly: (businessHoursOnly: boolean) => void;
   updateIncludeOutbound: (includeOutbound: boolean) => void;
   updateExcludeDeflects: (excludeDeflects: boolean) => void;
+  updateStrictQueueAnswered: (strictQueueAnswered: boolean) => void;
   resetFilters: () => void;
 }
 
@@ -33,6 +34,7 @@ const defaultFilters: DashboardFilters = {
   businessHoursOnly: false,
   includeOutbound: false,
   excludeDeflects: true,
+  strictQueueAnswered: false,
   timezone: getBrowserTimeZone(),
 };
 
@@ -100,6 +102,14 @@ export const useFilterStore = create<FilterStore>((set) => ({
       filters: {
         ...state.filters,
         excludeDeflects,
+      },
+    })),
+
+  updateStrictQueueAnswered: (strictQueueAnswered: boolean) =>
+    set((state) => ({
+      filters: {
+        ...state.filters,
+        strictQueueAnswered,
       },
     })),
 

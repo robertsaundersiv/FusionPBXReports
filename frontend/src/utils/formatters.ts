@@ -2,7 +2,7 @@ import { startOfDay, endOfDay, subDays, format } from 'date-fns';
 
 export const dateUtils = {
   getDateRangeByPreset(preset: string): { startDate: Date; endDate: Date } {
-    const endDate = new Date();
+    let endDate = new Date();
     let startDate = new Date();
 
     switch (preset) {
@@ -11,7 +11,7 @@ export const dateUtils = {
         break;
       case 'yesterday':
         startDate = startOfDay(subDays(new Date(), 1));
-        endDate.setHours(0, 0, 0, 0);
+        endDate = subDays(new Date(), 1);
         break;
       case 'last_7':
         startDate = startOfDay(subDays(new Date(), 6));

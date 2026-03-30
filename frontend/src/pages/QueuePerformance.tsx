@@ -18,7 +18,14 @@ import type {
 import { ChevronDown, ChevronUp, AlertCircle, RefreshCw } from 'lucide-react';
 
 export default function QueuePerformance() {
-  const { filters, updateDateRange, updateQueueIds, updateDirection, updateTimezone } = useFilterStore();
+  const {
+    filters,
+    updateDateRange,
+    updateQueueIds,
+    updateDirection,
+    updateTimezone,
+    updateStrictQueueAnswered,
+  } = useFilterStore();
   const [data, setData] = useState<QueuePerformanceHourlyResponse | null>(null);
   const [queues, setQueues] = useState<Queue[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -80,6 +87,13 @@ export default function QueuePerformance() {
     loadData();
   }, [loadData]);
 
+  // Queue pages are inbound-only by definition.
+  useEffect(() => {
+    if (filters.direction !== 'inbound') {
+      updateDirection('inbound');
+    }
+  }, [filters.direction, updateDirection]);
+
   // Load metadata on mount
   useEffect(() => {
     loadMetadata();
@@ -134,9 +148,12 @@ export default function QueuePerformance() {
           onFiltersChange={(newFilters) => {
             updateDateRange(newFilters.dateRange);
             updateQueueIds(newFilters.queueIds);
-            updateDirection(newFilters.direction);
+            updateDirection('inbound');
             updateTimezone(newFilters.timezone);
+            updateStrictQueueAnswered(newFilters.strictQueueAnswered);
           }}
+          showDirection={false}
+          showStrictQueueAnsweredToggle={true}
           showExcludeDeflectsToggle={false}
         />
         <div className="p-8 text-center">
@@ -158,9 +175,12 @@ export default function QueuePerformance() {
           onFiltersChange={(newFilters) => {
             updateDateRange(newFilters.dateRange);
             updateQueueIds(newFilters.queueIds);
-            updateDirection(newFilters.direction);
+            updateDirection('inbound');
             updateTimezone(newFilters.timezone);
+            updateStrictQueueAnswered(newFilters.strictQueueAnswered);
           }}
+          showDirection={false}
+          showStrictQueueAnsweredToggle={true}
           showExcludeDeflectsToggle={false}
         />
         <div className="p-8">
@@ -194,9 +214,12 @@ export default function QueuePerformance() {
           onFiltersChange={(newFilters) => {
             updateDateRange(newFilters.dateRange);
             updateQueueIds(newFilters.queueIds);
-            updateDirection(newFilters.direction);
+            updateDirection('inbound');
             updateTimezone(newFilters.timezone);
+            updateStrictQueueAnswered(newFilters.strictQueueAnswered);
           }}
+          showDirection={false}
+          showStrictQueueAnsweredToggle={true}
           showExcludeDeflectsToggle={false}
         />
         <div className="p-8">
@@ -222,9 +245,12 @@ export default function QueuePerformance() {
         onFiltersChange={(newFilters) => {
           updateDateRange(newFilters.dateRange);
           updateQueueIds(newFilters.queueIds);
-          updateDirection(newFilters.direction);
+          updateDirection('inbound');
           updateTimezone(newFilters.timezone);
+          updateStrictQueueAnswered(newFilters.strictQueueAnswered);
         }}
+        showDirection={false}
+        showStrictQueueAnsweredToggle={true}
         showExcludeDeflectsToggle={false}
       />
 

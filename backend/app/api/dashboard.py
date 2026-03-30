@@ -120,7 +120,7 @@ def local_timestamp_expr(epoch_column, timezone_name: str):
     return func.timezone(timezone_name, func.to_timestamp(epoch_column))
 
 
-def is_queue_entry_answered(records) -> bool:
+def is_queue_entry_answered(records, strict_answered: bool = False) -> bool:
     """Return True when any record indicates the queue interaction was answered.
 
     FusionPBX data can have answered interactions with missing
@@ -131,6 +131,10 @@ def is_queue_entry_answered(records) -> bool:
         if getattr(record, "cc_queue_answered_epoch", None) is not None:
             return True
 
+    if strict_answered:
+        return False
+
+    for record in records:
         hangup_cause = (getattr(record, "hangup_cause", "") or "").upper()
         if getattr(record, "answer_epoch", None) is not None and hangup_cause == "NORMAL_CLEARING":
             return True
@@ -138,7 +142,7 @@ def is_queue_entry_answered(records) -> bool:
     return False
 
 
-def get_queue_entry_asa_seconds(records) -> Optional[float]:
+def get_queue_entry_asa_seconds(records, strict_answered: bool = False) -> Optional[float]:
     """Return queue wait time for an answered entry, if derivable."""
     waits = []
     for record in records:
@@ -149,6 +153,9 @@ def get_queue_entry_asa_seconds(records) -> Optional[float]:
         queue_answered_epoch = getattr(record, "cc_queue_answered_epoch", None)
         if queue_answered_epoch is not None:
             waits.append(queue_answered_epoch - joined_epoch)
+            continue
+
+        if strict_answered:
             continue
 
         hangup_cause = (getattr(record, "hangup_cause", "") or "").upper()
@@ -163,9 +170,9 @@ def get_queue_entry_asa_seconds(records) -> Optional[float]:
     return max(0, min(waits))
 
 
-def get_queue_entry_aht_seconds(records) -> Optional[float]:
+def get_queue_entry_aht_seconds(records, strict_answered: bool = False) -> Optional[float]:
     """Return AHT contribution for an answered queue entry."""
-    if not is_queue_entry_answered(records):
+    if not is_queue_entry_answered(records, strict_answered=strict_answered):
         return None
 
     durations = [
@@ -858,6 +865,7 @@ async def get_queue_performance(
     end_date: Optional[datetime] = Query(None),
     queue_ids: Optional[List[str]] = Query(None),
     direction: Optional[str] = Query(None),
+    strict_answered: bool = Query(False),
     timezone: str = Query("America/Phoenix"),
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -871,6 +879,9 @@ async def get_queue_performance(
     - Breakdown charts (hangup causes, call outcomes)
     """
     
+    # Queue metrics are inbound-only.
+    direction = "inbound"
+
     # Default to last 7 days if not specified
     user_timezone = get_requested_timezone(timezone)
     if not end_date:
@@ -931,7 +942,7 @@ async def get_queue_performance(
         
         # Helper function to determine if a queue entry is truly abandoned
         def is_true_abandoned(records):
-            if is_queue_entry_answered(records):
+            if is_queue_entry_answered(records, strict_answered=strict_answered):
                 return False
             for record in records:
                 if (record.billsec or 0) != 0:
@@ -949,7 +960,7 @@ async def get_queue_performance(
         # Count outcomes
         total_offered = len(unique_queue_entries)
         entry_is_answered = {
-            key: is_queue_entry_answered(records)
+            key: is_queue_entry_answered(records, strict_answered=strict_answered)
             for key, records in unique_queue_entries.items()
         }
         entry_is_abandoned = {
@@ -964,7 +975,10 @@ async def get_queue_performance(
         
         # ASA calculations (entry-based, aligned to answered-entry logic)
         asa_times = [
-            asa for asa in (get_queue_entry_asa_seconds(records) for records in unique_queue_entries.values())
+            asa for asa in (
+                get_queue_entry_asa_seconds(records, strict_answered=strict_answered)
+                for records in unique_queue_entries.values()
+            )
             if asa is not None
         ]
         avg_asa = sum(asa_times) / len(asa_times) if asa_times else 0
@@ -972,7 +986,10 @@ async def get_queue_performance(
         
         # AHT calculations (entry-based, aligned to answered-entry logic)
         aht_times = [
-            aht for aht in (get_queue_entry_aht_seconds(records) for records in unique_queue_entries.values())
+            aht for aht in (
+                get_queue_entry_aht_seconds(records, strict_answered=strict_answered)
+                for records in unique_queue_entries.values()
+            )
             if aht is not None
         ]
         avg_aht = sum(aht_times) / len(aht_times) if aht_times else 0
@@ -1115,7 +1132,7 @@ async def get_queue_performance(
             
             # Count answered
             answered_count = sum(1 for records in bucket_entries.values() 
-                               if is_queue_entry_answered(records))
+                               if is_queue_entry_answered(records, strict_answered=strict_answered))
             
             # Count abandoned
             abandoned_count = sum(1 for records in bucket_entries.values()
@@ -1123,7 +1140,10 @@ async def get_queue_performance(
             
             # Service level / ASA use entry-level answered waits.
             hour_asa_times = [
-                asa for asa in (get_queue_entry_asa_seconds(records) for records in bucket_entries.values())
+                asa for asa in (
+                    get_queue_entry_asa_seconds(records, strict_answered=strict_answered)
+                    for records in bucket_entries.values()
+                )
                 if asa is not None
             ]
             
@@ -1137,7 +1157,10 @@ async def get_queue_performance(
             
             # AHT uses entry-level answered durations.
             hour_aht_times = [
-                aht for aht in (get_queue_entry_aht_seconds(records) for records in bucket_entries.values())
+                aht for aht in (
+                    get_queue_entry_aht_seconds(records, strict_answered=strict_answered)
+                    for records in bucket_entries.values()
+                )
                 if aht is not None
             ]
             hour_aht = sum(hour_aht_times) / len(hour_aht_times) if hour_aht_times else None
@@ -1200,6 +1223,7 @@ async def get_queue_performance_report(
     end_date: Optional[datetime] = Query(None),
     queue_ids: Optional[List[str]] = Query(None),
     direction: Optional[str] = Query(None),
+    strict_answered: bool = Query(False),
     exclude_deflects: bool = Query(True),
     timezone: str = Query("America/Phoenix"),
     current_user: dict = Depends(get_current_user),
@@ -1218,6 +1242,9 @@ async def get_queue_performance_report(
     - AHT: Average Handle Time (talk time for answered records)
     """
     
+    # Queue report is inbound-only.
+    direction = "inbound"
+
     # Default to last 7 days if not specified
     user_timezone = get_requested_timezone(timezone)
     if not end_date:
@@ -1292,7 +1319,7 @@ async def get_queue_performance_report(
     # ======================================================================
 
     def is_true_abandoned(records):
-        if is_queue_entry_answered(records):
+        if is_queue_entry_answered(records, strict_answered=strict_answered):
             return False
 
         for record in records:
@@ -1315,12 +1342,15 @@ async def get_queue_performance_report(
         # Count outcomes using unique queue entries
         offered = len(entry_map)
         answered = sum(1 for records in entry_map.values()
-                       if is_queue_entry_answered(records))
+                       if is_queue_entry_answered(records, strict_answered=strict_answered))
         abandoned = sum(1 for records in entry_map.values() if is_true_abandoned(records))
 
         # ASA and service level use answered queue entries (not raw record rows).
         asa_times = [
-            asa for asa in (get_queue_entry_asa_seconds(records) for records in entry_map.values())
+            asa for asa in (
+                get_queue_entry_asa_seconds(records, strict_answered=strict_answered)
+                for records in entry_map.values()
+            )
             if asa is not None
         ]
         service_level_count = sum(1 for t in asa_times if t <= 30)
@@ -1329,7 +1359,10 @@ async def get_queue_performance_report(
 
         # AHT uses answered queue entries (not raw record rows).
         aht_times = [
-            aht for aht in (get_queue_entry_aht_seconds(records) for records in entry_map.values())
+            aht for aht in (
+                get_queue_entry_aht_seconds(records, strict_answered=strict_answered)
+                for records in entry_map.values()
+            )
             if aht is not None
         ]
         aht_sec = sum(aht_times) / len(aht_times) if aht_times else 0

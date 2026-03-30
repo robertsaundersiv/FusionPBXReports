@@ -53,6 +53,7 @@ export default function QueuePerformanceReportPage() {
     updateDirection,
     updateTimezone,
     updateExcludeDeflects,
+    updateStrictQueueAnswered,
   } = useFilterStore();
   const [data, setData] = useState<QueuePerformanceReportResponse | null>(null);
   const [queues, setQueues] = useState<Queue[]>([]);
@@ -106,6 +107,13 @@ export default function QueuePerformanceReportPage() {
     loadData();
   }, [loadData]);
 
+  // Queue report is inbound-only by definition.
+  useEffect(() => {
+    if (filters.direction !== 'inbound') {
+      updateDirection('inbound');
+    }
+  }, [filters.direction, updateDirection]);
+
   const handleRetry = () => {
     loadData();
   };
@@ -113,9 +121,10 @@ export default function QueuePerformanceReportPage() {
   const handleFiltersChange = (newFilters: DashboardFilters) => {
     updateDateRange(newFilters.dateRange);
     updateQueueIds(newFilters.queueIds);
-    updateDirection(newFilters.direction);
+    updateDirection('inbound');
     updateTimezone(newFilters.timezone);
     updateExcludeDeflects(newFilters.excludeDeflects);
+    updateStrictQueueAnswered(newFilters.strictQueueAnswered);
   };
 
   // Filter and sort data
@@ -345,6 +354,7 @@ export default function QueuePerformanceReportPage() {
           showDirection={false}
           showOutboundToggle={false}
           showExcludeDeflectsToggle={false}
+          showStrictQueueAnsweredToggle={true}
         />
       </div>
 

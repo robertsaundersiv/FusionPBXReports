@@ -88,7 +88,10 @@ def get_time_window(
     if not start:
         start = end - timedelta(days=7)
     start_epoch = int(start.timestamp())
-    end_epoch = int(end.replace(hour=23, minute=59, second=59).timestamp())
+    # Respect explicitly provided timestamps (including timezone-adjusted
+    # end-of-day values from the frontend) to avoid unintentionally extending
+    # the query window and inflating counts.
+    end_epoch = int(end.timestamp())
     return start_epoch, end_epoch
 
 

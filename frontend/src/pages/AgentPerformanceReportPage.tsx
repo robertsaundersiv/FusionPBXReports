@@ -1,5 +1,5 @@
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
-import { ChevronDown, ChevronUp, Download, RefreshCw, Search } from 'lucide-react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ChevronDown, ChevronUp, Download, RefreshCw } from 'lucide-react';
 import { useFilterStore } from '../hooks/useFilterStore';
 import DashboardFilterBar from '../components/DashboardFilterBar';
 import { dashboardService } from '../services/dashboard';
@@ -56,6 +56,7 @@ export default function AgentPerformanceReportPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [outboundAddedCalls, setOutboundAddedCalls] = useState<number | null>(null);
+  const requestRef = useRef(0);
   const [tableState, setTableState] = useState<TableState>({
     sortField: 'handled_calls',
     sortOrder: 'desc',
@@ -88,6 +89,7 @@ export default function AgentPerformanceReportPage() {
   }, [updateAgentUuids]);
 
   const loadData = useCallback(async () => {
+    const requestId = ++requestRef.current;
     setLoading(true);
     setError(null);
 
@@ -97,19 +99,30 @@ export default function AgentPerformanceReportPage() {
           agentPerformanceService.getReport(filters),
           agentPerformanceService.getLeaderboard(filters),
         ]);
+        if (requestId !== requestRef.current) {
+          return;
+        }
         setData(reportResponse);
         setOutboundAddedCalls(leaderboardResponse.outbound_added_calls ?? 0);
       } else {
         const response = await agentPerformanceService.getReport(filters);
+        if (requestId !== requestRef.current) {
+          return;
+        }
         setData(response);
         setOutboundAddedCalls(null);
       }
     } catch (err: any) {
+      if (requestId !== requestRef.current) {
+        return;
+      }
       console.error('Error loading agent performance report:', err);
       setError(err.message || 'Failed to load agent performance report');
       setOutboundAddedCalls(null);
     } finally {
-      setLoading(false);
+      if (requestId === requestRef.current) {
+        setLoading(false);
+      }
     }
   }, [filters]);
 
@@ -321,27 +334,10 @@ export default function AgentPerformanceReportPage() {
         />
       </div>
 
-      <div className="flex items-center justify-between">
-        <div className="flex-1">
-          <div className="relative">
-            <Search size={18} className="absolute left-3 top-3 text-gray-400" />
-            <input
-              type="text"
-              placeholder="Search agent names..."
-              value={tableState.searchQuery}
-              onChange={(e) =>
-                setTableState((prev) => ({
-                  ...prev,
-                  searchQuery: e.target.value,
-                }))
-              }
-              className="w-full rounded-lg border border-gray-300 bg-white py-2 pl-10 pr-4 text-gray-900 placeholder-gray-500 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-            />
-          </div>
-        </div>
+      <div className="flex justify-end">
         <button
           onClick={exportToCSV}
-          className="ml-4 flex items-center space-x-2 rounded-lg bg-green-600 px-4 py-2 text-white hover:bg-green-700"
+          className="flex items-center space-x-2 rounded-lg bg-green-600 px-4 py-2 text-white hover:bg-green-700"
           disabled={!data?.agents || data.agents.length === 0}
         >
           <Download size={18} />

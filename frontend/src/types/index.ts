@@ -12,6 +12,7 @@ export interface DashboardFilters {
   businessHoursOnly: boolean;
   includeOutbound: boolean;
   excludeDeflects: boolean;
+  strictQueueAnswered: boolean;
   timezone: string;
 }
 

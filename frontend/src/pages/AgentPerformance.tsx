@@ -133,6 +133,8 @@ export default function AgentPerformance() {
   const [searchParams, setSearchParams] = useSearchParams();
   const initializedRef = useRef(false);
   const agentSyncRef = useRef(false);
+  const leaderboardRequestRef = useRef(0);
+  const detailRequestRef = useRef(0);
 
   const {
     filters,
@@ -238,9 +240,14 @@ export default function AgentPerformance() {
 
   useEffect(() => {
     const loadLeaderboard = async () => {
+      const requestId = ++leaderboardRequestRef.current;
       setLoading(true);
       try {
         const leaderboardResponse = await agentPerformanceService.getLeaderboard(filters);
+        if (requestId !== leaderboardRequestRef.current) {
+          return;
+        }
+
         if (filters.includeOutbound) {
           setOutboundAddedCalls(leaderboardResponse.outbound_added_calls ?? 0);
         } else {
@@ -250,10 +257,15 @@ export default function AgentPerformance() {
         setLeaderboard(leaderboardResponse);
         setCanViewMissedCalls(Boolean(leaderboardResponse.can_view_missed_calls));
       } catch (error) {
+        if (requestId !== leaderboardRequestRef.current) {
+          return;
+        }
         console.error('Error loading leaderboard:', error);
         setOutboundAddedCalls(null);
       } finally {
-        setLoading(false);
+        if (requestId === leaderboardRequestRef.current) {
+          setLoading(false);
+        }
       }
     };
 
@@ -266,6 +278,7 @@ export default function AgentPerformance() {
     }
 
     const loadDetail = async () => {
+      const requestId = ++detailRequestRef.current;
       setDetailLoading(true);
       try {
         const [trendResponse, longOutliers, lowOutliers] = await Promise.all([
@@ -273,6 +286,9 @@ export default function AgentPerformance() {
           agentPerformanceService.getOutliers(filters, agentId, 'long_calls', 25),
           agentPerformanceService.getOutliers(filters, agentId, 'low_mos', 25),
         ]);
+        if (requestId !== detailRequestRef.current) {
+          return;
+        }
         setTrends(trendResponse);
         if (trendResponse.can_view_missed_calls !== undefined) {
           setCanViewMissedCalls(Boolean(trendResponse.can_view_missed_calls));
@@ -280,9 +296,14 @@ export default function AgentPerformance() {
         setOutliersLong(longOutliers);
         setOutliersLow(lowOutliers);
       } catch (error) {
+        if (requestId !== detailRequestRef.current) {
+          return;
+        }
         console.error('Error loading agent detail data:', error);
       } finally {
-        setDetailLoading(false);
+        if (requestId === detailRequestRef.current) {
+          setDetailLoading(false);
+        }
       }
     };
 
