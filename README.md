@@ -89,6 +89,15 @@ docker compose up -d --build
 docker compose logs -f
 ```
 
+For routine production updates after the initial setup:
+
+```bash
+chmod +x scripts/update-production.sh
+./scripts/update-production.sh
+```
+
+That script pulls the latest code from the current branch, rebuilds the app containers, and injects the current Git commit SHA into the Quality & Health page.
+
 ### 5. Authentication and Seeded Users
 
 On backend startup, the container runs migrations, seeds users, and performs initial metadata sync (queues, agents, extensions):

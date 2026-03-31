@@ -124,6 +124,23 @@ docker compose build backend
 docker compose up -d backend
 ```
 
+### Production Code Updates
+
+On the production server, use the update script from the repo root:
+
+```bash
+chmod +x scripts/update-production.sh
+./scripts/update-production.sh
+```
+
+If you need to update a non-default branch, pass it explicitly:
+
+```bash
+./scripts/update-production.sh main
+```
+
+The script pulls the latest commit with `git pull --ff-only`, exports `GIT_COMMIT` and `BUILD_TIMESTAMP`, and rebuilds the application services so the Quality & Health page shows the deployed Git commit.
+
 ### Fresh Start
 
 ```bash
