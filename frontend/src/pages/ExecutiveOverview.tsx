@@ -92,6 +92,12 @@ export default function ExecutiveOverview() {
     };
   }, []);
 
+  useEffect(() => {
+    if (filters.direction !== 'inbound') {
+      updateDirection('inbound');
+    }
+  }, [filters.direction, updateDirection]);
+
   // Load metadata once on mount
   useEffect(() => {
     const loadMetadata = async () => {
@@ -115,7 +121,7 @@ export default function ExecutiveOverview() {
   useEffect(() => {
     console.log('Filters changed, reloading data...', filters);
     setLoading(true);
-    dashboardService.getExecutiveOverview(filters)
+    dashboardService.getExecutiveOverview({ ...filters, direction: 'inbound' })
       .then((overviewData) => {
         console.log('Data loaded:', overviewData);
         setData(overviewData);
@@ -155,10 +161,11 @@ export default function ExecutiveOverview() {
         onFiltersChange={(newFilters) => {
           updateDateRange(newFilters.dateRange);
           updateQueueIds(newFilters.queueIds);
-          updateDirection(newFilters.direction);
+          updateDirection('inbound');
           updateTimezone(newFilters.timezone);
           
         }}
+        showDirection={false}
       />
 
       <div className="p-6 space-y-6">

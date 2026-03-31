@@ -26,8 +26,8 @@ interface FilterStore {
 
 const defaultFilters: DashboardFilters = {
   dateRange: {
-    preset: 'last_7',
-    ...dateUtils.getDateRangeByPreset('last_7'),
+    preset: 'today',
+    ...dateUtils.getDateRangeByPreset('today'),
   },
   queueIds: [],
   agentUuids: [],
