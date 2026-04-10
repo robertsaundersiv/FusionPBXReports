@@ -5,6 +5,7 @@ A comprehensive call center analytics and reporting solution for FusionPBX. This
 ## Features
 
 ### Dashboards
+
 - **Executive Overview** - High-level KPIs, trends, and operational metrics
 - **Queue Performance** - Hourly-bucketed queue metrics with prefix-based grouping, interactive charts, and 7 key KPIs per queue (Offered, Answered, Abandoned, Service Level, ASA, AHT, MOS). See [docs/QUEUE_PERFORMANCE_PAGE.md](docs/QUEUE_PERFORMANCE_PAGE.md) for details.
 - **Agent Performance & Coaching** - Agent leaderboards and coaching insights
@@ -15,6 +16,7 @@ A comprehensive call center analytics and reporting solution for FusionPBX. This
 - **Metrics Audit** - Data verification and quality checks
 
 ### Key Metrics
+
 - Call Volume (Offered, Answered, Abandoned)
 - Service Level % (configurable threshold, default 30s)
 - Answer Rate & Abandon Rate
@@ -31,11 +33,13 @@ A comprehensive call center analytics and reporting solution for FusionPBX. This
 ## Requirements
 
 ### Development (Windows)
+
 - Docker Desktop for Windows
 - Docker Compose (included with Docker Desktop)
 - 8GB+ RAM recommended
 
 ### Production (Ubuntu)
+
 - Docker and Docker Compose
 - 16GB+ RAM recommended
 - Ubuntu 20.04 LTS or later
@@ -54,7 +58,8 @@ cp .env.example .env
 ### 2. Configure FusionPBX Connection
 
 Edit `.env` and set:
-```
+
+```bash
 FUSIONPBX_HOST=https://your-pbx.example.com
 FUSIONPBX_API_KEY=your_api_key_here
 ```
@@ -67,9 +72,10 @@ docker compose up -d --build
 ```
 
 Services will be available at:
-- Frontend: http://localhost:3000
-- Backend API: http://localhost:8000
-- API Docs: http://localhost:8000/docs
+
+- Frontend: <http://localhost:3000>
+- Backend API: <http://localhost:8000>
+- API Docs: <http://localhost:8000/docs>
 
 ### 4. Run on Ubuntu (Production)
 
@@ -119,6 +125,7 @@ EXTRA_SEED_USERS=user1:asfg087ti23S:user:user1@local;user2:4q5AG8L4V5YT8:user:us
 ```
 
 Notes:
+
 - `scripts.seed` is idempotent (existing users are not duplicated)
 - Metadata sync scripts are run in non-blocking mode at container startup (app still boots if FusionPBX is temporarily unreachable)
 - Default login is whatever `ADMIN_USERNAME` / `ADMIN_PASSWORD` are set to in `.env`
@@ -143,30 +150,35 @@ For full details, see [docs/TESTING_ENVIRONMENT.md](docs/TESTING_ENVIRONMENT.md)
 ## Architecture
 
 ### Backend (FastAPI)
+
 - REST API endpoints for all dashboards
 - Real-time KPI calculation
 - User authentication and role-based access
 - Database schema and migrations (Alembic)
 
 ### Worker (Celery + Redis)
+
 - ETL pipeline for CDR data ingestion
 - Periodic metadata synchronization
 - Aggregation computation (hourly/daily)
 - Scheduled report generation
 
 ### Database (PostgreSQL)
+
 - CDR records with full call history
 - Queue and agent metadata
 - Hourly and daily aggregates
 - User management and configurations
 
 ### Frontend (React + TypeScript)
+
 - Responsive dashboard UI with Tailwind CSS
 - Interactive charts using Recharts
 - Global filtering across all pages
 - Call record drilldowns and CSV export
 
 ### Reverse Proxy (Nginx)
+
 - SSL/TLS termination
 - Request routing
 - Gzip compression
@@ -255,7 +267,7 @@ KPI calculations are defined in [backend/app/kpi_definitions.py](backend/app/kpi
 
 ### API Endpoints (Examples)
 
-```
+```rest
 GET /api/v1/dashboard/executive-overview?date_range=last_7&queues=q1,q2
 GET /api/v1/dashboard/queue-performance/{queue_id}
 GET /api/v1/dashboard/agent-performance/{agent_uuid}
@@ -266,15 +278,18 @@ GET /api/v1/admin/metrics-audit
 ## Security
 
 ### Authentication
+
 - JWT token-based authentication
 - Role-based access control (Admin, Manager, User, Viewer)
 
 ### Number Masking
+
 - Admins see unmasked caller numbers
 - Managers and Users see masked numbers by default
 - Configurable per role in Admin Settings
 
 ### Data Protection
+
 - Passwords hashed with bcrypt
 - Secrets stored in environment variables
 - SSL/TLS encryption in transit
@@ -283,15 +298,18 @@ GET /api/v1/admin/metrics-audit
 ## Performance Tuning
 
 ### Database Indexes
+
 - CDR queries indexed on: `start_epoch`, `cc_queue`, `caller_id_number`
 - Aggregates indexed on: `hour`, `date`, `queue_id`
 
 ### Caching Strategy
+
 - Hourly aggregates cached for 1 hour
 - Daily aggregates cached for 24 hours
 - Queue/agent metadata cached with TTL refresh
 
 ### Query Optimization
+
 - Aggregates pre-computed for dashboards
 - Paginated call list queries
 - Efficient date range filtering
@@ -315,6 +333,7 @@ docker compose logs -f db
 ## Maintenance
 
 ### Database Backups
+
 ```bash
 # Backup
 docker compose exec db pg_dump -U phonereports phonereports > backup.sql
@@ -324,6 +343,7 @@ docker compose exec -T db psql -U phonereports phonereports < backup.sql
 ```
 
 ### Restart Services
+
 ```bash
 docker compose restart backend
 docker compose restart worker
@@ -331,6 +351,7 @@ docker compose restart db
 ```
 
 ### View Database
+
 ```bash
 docker compose exec db psql -U phonereports -d phonereports
 ```
@@ -338,16 +359,19 @@ docker compose exec db psql -U phonereports -d phonereports
 ## Troubleshooting
 
 ### Cannot connect to FusionPBX
+
 - Verify `FUSIONPBX_HOST` and `FUSIONPBX_API_KEY` in `.env`
 - Check network connectivity: `docker compose exec backend curl {FUSIONPBX_HOST}/health`
 - Check API key permissions
 
 ### No data appearing
+
 - Verify CDR records exist in FusionPBX
 - Check worker logs: `docker compose logs -f worker`
 - Manually trigger ETL: `docker compose exec worker celery -A app.celery_app call app.tasks.ingest_cdr_records`
 
 ### High memory usage
+
 - Reduce worker concurrency in docker-compose.yml
 - Check for large result sets in queries
 - Review database connection pool settings
@@ -398,6 +422,7 @@ docker compose exec backend alembic upgrade head
 ## Support & Issues
 
 For issues, please check:
+
 1. Logs: `docker compose logs -f`
 2. FusionPBX API connectivity
 3. Database connection status

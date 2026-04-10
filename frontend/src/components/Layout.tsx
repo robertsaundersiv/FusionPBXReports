@@ -19,6 +19,7 @@ export default function Layout({ children, currentUser }: LayoutProps) {
 
   const navigation = [
     { name: 'Executive Overview', href: '/executive-overview' },
+    { name: 'Wallboard', href: '/wallboard' },
     { name: 'Queue Performance', href: '/queue-performance' },
     { name: 'Queue Performance Report', href: '/queue-performance-report' },
     { name: 'Agent Performance', href: '/agent-performance' },

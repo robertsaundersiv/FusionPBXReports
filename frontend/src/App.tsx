@@ -13,6 +13,7 @@ const QueuePerformanceReport = React.lazy(() => import('./pages/QueuePerformance
 const AgentPerformance = React.lazy(() => import('./pages/AgentPerformance'));
 const AgentPerformanceReport = React.lazy(() => import('./pages/AgentPerformanceReportPage'));
 const OutboundCalls = React.lazy(() => import('./pages/OutboundCalls'));
+const Wallboard = React.lazy(() => import('./pages/Wallboard'));
 const QualityHealth = React.lazy(() => import('./pages/QualityHealth'));
 const RepeatCallers = React.lazy(() => import('./pages/RepeatCallers'));
 const AdminSettings = React.lazy(() => import('./pages/AdminSettings'));
@@ -68,6 +69,7 @@ function App() {
           <Routes>
             <Route path="/" element={<Navigate to="/executive-overview" replace />} />
             <Route path="/executive-overview" element={<ExecutiveOverview />} />
+            <Route path="/wallboard" element={<Wallboard />} />
             <Route path="/queue-performance" element={<QueuePerformance />} />
             <Route path="/queue-performance-report" element={<QueuePerformanceReport />} />
             <Route path="/agent-performance" element={<AgentPerformance />} />
