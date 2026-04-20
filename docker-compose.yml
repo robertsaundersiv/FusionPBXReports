@@ -1,5 +1,6 @@
 services:
   db:
+    restart: unless-stopped
     image: postgres:16
     container_name: fpbx-analytics-db
     environment:
@@ -17,6 +18,7 @@ services:
       - analytics-network
 
   redis:
+    restart: unless-stopped
     image: redis:7-alpine
     container_name: fpbx-analytics-redis
     volumes:
@@ -30,6 +32,7 @@ services:
       - analytics-network
 
   backend:
+    restart: unless-stopped
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -66,6 +69,7 @@ services:
     command: sh -c "python -m alembic upgrade head && python -m scripts.seed && (python -m scripts.sync_metadata_only || true) && (python -m scripts.sync_extensions || true) && uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4"
 
   worker:
+    restart: unless-stopped
     build:
       context: ./worker
       dockerfile: Dockerfile
@@ -93,6 +97,7 @@ services:
     command: celery -A app.celery_app worker --loglevel=info --concurrency=4
 
   celery-beat:
+    restart: unless-stopped
     build:
       context: ./worker
       dockerfile: Dockerfile
@@ -118,6 +123,7 @@ services:
     command: celery -A app.celery_app beat --loglevel=info
 
   frontend:
+    restart: unless-stopped
     build:
       context: ./frontend
       dockerfile: Dockerfile
@@ -131,6 +137,7 @@ services:
       - analytics-network
 
   nginx:
+    restart: unless-stopped
     image: nginx:alpine
     container_name: fpbx-analytics-nginx
     environment:
