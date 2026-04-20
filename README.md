@@ -409,6 +409,14 @@ Swagger UI automatically generated: `http://localhost:8000/docs`
 3. Add to API response schema
 4. Add widget to dashboard UI
 
+## Documentation Update Policy
+
+To keep markdown documentation current as code is merged:
+
+- Pull requests that modify non-markdown files must also include at least one `.md` update.
+- Markdown files are linted in CI to keep style consistent with the existing docs in this repository.
+- Update the most relevant document(s), typically `README.md` and/or files in `docs/`.
+
 ### Database Migrations
 
 ```bash

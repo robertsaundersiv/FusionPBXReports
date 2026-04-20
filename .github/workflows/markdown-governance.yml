@@ -1,0 +1,59 @@
+name: Markdown Governance
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+
+permissions:
+  contents: read
+
+jobs:
+  markdown-style:
+    name: Markdown style
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Lint markdown files
+        run: npx --yes markdownlint-cli2 "**/*.md" "#**/node_modules/**"
+
+  markdown-updates-required:
+    name: Markdown updates required
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify markdown updates are included
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          base_sha="${{ github.event.pull_request.base.sha }}"
+          head_sha="${{ github.event.pull_request.head.sha }}"
+
+          changed_files="$(git diff --name-only "${base_sha}" "${head_sha}")"
+
+          if [[ -z "${changed_files}" ]]; then
+            echo "No changed files detected."
+            exit 0
+          fi
+
+          non_markdown_changed="$(echo "${changed_files}" | grep -Evi '\.md$' || true)"
+          markdown_changed="$(echo "${changed_files}" | grep -Ei '\.md$' || true)"
+
+          if [[ -n "${non_markdown_changed}" && -z "${markdown_changed}" ]]; then
+            echo "::error::This PR modifies non-markdown files but does not update any .md files."
+            echo "::error::Please update at least one relevant markdown document so merged changes stay documented."
+            exit 1
+          fi
+
+          echo "Markdown update requirement satisfied."
