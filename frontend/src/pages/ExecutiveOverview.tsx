@@ -8,10 +8,13 @@ import { X } from 'lucide-react';
 import type { ExecutiveOverviewData, Queue, Agent, KPIMetric } from '../types';
 
 function formatHourBucketLabel(value: string) {
-  const hour = Number.parseInt(value.slice(0, 2), 10);
+  const [hourPart, minutePart] = value.split(':');
+  const hour = Number.parseInt(hourPart ?? '0', 10);
+  const minute = Number.parseInt(minutePart ?? '0', 10);
   const suffix = hour >= 12 ? 'PM' : 'AM';
   const displayHour = hour % 12 === 0 ? 12 : hour % 12;
-  return `${displayHour}${suffix[0]}`;
+  const minuteLabel = minute === 0 ? '' : `:${minute.toString().padStart(2, '0')}`;
+  return `${displayHour}${minuteLabel}${suffix[0]}`;
 }
 
 function formatDurationLabel(totalSeconds: number) {
@@ -299,13 +302,13 @@ export default function ExecutiveOverview() {
 
           <div className="card">
             <div className="mb-4">
-              <h3 className="text-lg font-semibold">Call Volume by Hour</h3>
-              <p className="text-sm text-slate-500">Hourly buckets across the selected date range.</p>
+              <h3 className="text-lg font-semibold">Call Volume by 30-Minute Interval</h3>
+              <p className="text-sm text-slate-500">30-minute buckets across the selected date range.</p>
             </div>
             <ResponsiveContainer width="100%" height={320}>
               <LineChart data={hourBuckets} margin={{ top: 8, right: 16, left: 0, bottom: 16 }}>
                 <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="bucket" tickFormatter={formatHourBucketLabel} height={40} interval={1} />
+                <XAxis dataKey="bucket" tickFormatter={formatHourBucketLabel} height={40} interval={3} />
                 <YAxis yAxisId="average" />
                 <Tooltip
                   formatter={(value: number, name: string) => [

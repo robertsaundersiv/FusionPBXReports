@@ -443,9 +443,9 @@ async def get_executive_overview(
     offered_trend = [{'date': str(d[0]), 'value': d[1]} for d in daily_aggregates]
     answered_trend = [{'date': str(d[0]), 'value': d[2] or 0} for d in daily_aggregates]
 
-    # Bucket call volume by weekday and hour using the same unique queue-entry methodology
+    # Bucket call volume by weekday and half-hour using the same unique queue-entry methodology
     weekday_totals = {index: 0 for index in range(7)}
-    hour_totals = {index: 0 for index in range(24)}
+    half_hour_totals = {index: 0 for index in range(48)}
 
     for records in unique_queue_entries.values():
         record = records[0]
@@ -455,8 +455,9 @@ async def get_executive_overview(
 
         bucket_dt = datetime.fromtimestamp(queue_epoch, user_timezone)
         weekday_index = to_sunday_first_weekday_index(bucket_dt.weekday())
+        half_hour_index = (bucket_dt.hour * 2) + (1 if bucket_dt.minute >= 30 else 0)
         weekday_totals[weekday_index] += 1
-        hour_totals[bucket_dt.hour] += 1
+        half_hour_totals[half_hour_index] += 1
 
     date_cursor = start_date.astimezone(user_timezone).date()
     end_date_only = end_date.astimezone(user_timezone).date()
@@ -483,12 +484,14 @@ async def get_executive_overview(
         })
 
     hour_call_volume_buckets = []
-    for hour_index in range(24):
-        total_calls = hour_totals[hour_index]
+    for half_hour_index in range(48):
+        total_calls = half_hour_totals[half_hour_index]
         average_calls = (total_calls / total_days_in_range) if total_days_in_range > 0 else 0
+        hour = half_hour_index // 2
+        minute = 30 if half_hour_index % 2 else 0
         hour_call_volume_buckets.append({
-            'bucket': f'{hour_index:02d}:00',
-            'sortOrder': hour_index,
+            'bucket': f'{hour:02d}:{minute:02d}',
+            'sortOrder': half_hour_index,
             'totalCalls': total_calls,
             'averageCalls': round(average_calls, 2),
             'occurrences': total_days_in_range,
