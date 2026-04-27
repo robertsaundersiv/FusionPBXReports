@@ -17,6 +17,9 @@ type SortField =
   | 'offered'
   | 'answered'
   | 'abandoned'
+  | 'voicemail_calls'
+  | 'missed_calls'
+  | 'missed_percent'
   | 'answer_rate'
   | 'service_level_30'
   | 'asa_sec'
@@ -35,6 +38,9 @@ interface ReportRow {
   offered: number;
   answered: number;
   abandoned: number;
+  voicemail_calls?: number;
+  missed_calls?: number;
+  missed_percent?: number;
   answer_rate: number;
   service_level_30: number;
   asa_sec: number;
@@ -133,6 +139,9 @@ export default function QueuePerformanceReportPage() {
 
     let filtered: ReportRow[] = data.rows.map((row) => ({
       ...row,
+      voicemail_calls: row.voicemail_calls ?? 0,
+      missed_calls: row.missed_calls ?? ((row.abandoned ?? 0) + (row.voicemail_calls ?? 0)),
+      missed_percent: row.missed_percent ?? (row.offered > 0 ? (((row.abandoned ?? 0) + (row.voicemail_calls ?? 0)) / row.offered) * 100 : 0),
       answer_rate: row.offered > 0 ? (row.answered / row.offered) * 100 : 0,
     }));
 
@@ -172,6 +181,9 @@ export default function QueuePerformanceReportPage() {
         offered: 0,
         answered: 0,
         abandoned: 0,
+        voicemail_calls: 0,
+        missed_calls: 0,
+        missed_percent: 0,
         service_level_30: 0,
         asa_sec: 0,
         aht_sec: 0,
@@ -181,6 +193,8 @@ export default function QueuePerformanceReportPage() {
     const totalOffered = displayData.reduce((sum, row) => sum + row.offered, 0);
     const totalAnswered = displayData.reduce((sum, row) => sum + row.answered, 0);
     const totalAbandoned = displayData.reduce((sum, row) => sum + row.abandoned, 0);
+    const totalVoicemail = displayData.reduce((sum, row) => sum + (row.voicemail_calls ?? 0), 0);
+    const totalMissed = displayData.reduce((sum, row) => sum + (row.missed_calls ?? 0), 0);
 
     // Weighted Service Level: total_within_30 / total_offered_answered
     const totalSL30Num = displayData.reduce((sum, row) => sum + row.sl30_numerator, 0);
@@ -201,6 +215,9 @@ export default function QueuePerformanceReportPage() {
       offered: totalOffered,
       answered: totalAnswered,
       abandoned: totalAbandoned,
+      voicemail_calls: totalVoicemail,
+      missed_calls: totalMissed,
+      missed_percent: totalOffered > 0 ? (totalMissed / totalOffered) * 100 : 0,
       service_level_30: Math.round(serviceLevelTotal * 100) / 100,
       asa_sec: Math.round(asaTotal * 100) / 100,
       aht_sec: Math.round(ahtTotal * 100) / 100,
@@ -257,7 +274,10 @@ export default function QueuePerformanceReportPage() {
       'Queue Name',
       'Offered',
       'Answered',
-      'Abandoned',
+      'Abandoned (No VM)',
+      'Voicemail Calls',
+      'Missed Calls',
+      'Missed %',
       'Answer Rate (%)',
       'Service Level 30 (%)',
       'ASA (sec)',
@@ -274,6 +294,9 @@ export default function QueuePerformanceReportPage() {
           row.offered,
           row.answered,
           row.abandoned,
+          row.voicemail_calls ?? 0,
+          row.missed_calls ?? 0,
+          (row.missed_percent ?? 0).toFixed(2),
           answerRate,
           row.service_level_30.toFixed(2),
           row.asa_sec.toFixed(2),
@@ -285,7 +308,19 @@ export default function QueuePerformanceReportPage() {
     // Totals row
     const totalAnswerRate = totals.offered > 0 ? ((totals.answered / totals.offered) * 100).toFixed(2) : '0';
     lines.push(''); // Blank line
-    lines.push(['TOTAL', totals.offered, totals.answered, totals.abandoned, totalAnswerRate, totals.service_level_30.toFixed(2), totals.asa_sec.toFixed(2), totals.aht_sec.toFixed(2)].join(','));
+    lines.push([
+      'TOTAL',
+      totals.offered,
+      totals.answered,
+      totals.abandoned,
+      totals.voicemail_calls,
+      totals.missed_calls,
+      totals.missed_percent.toFixed(2),
+      totalAnswerRate,
+      totals.service_level_30.toFixed(2),
+      totals.asa_sec.toFixed(2),
+      totals.aht_sec.toFixed(2),
+    ].join(','));
 
     // Create blob and download
     const csv = lines.join('\n');
@@ -430,6 +465,30 @@ export default function QueuePerformanceReportPage() {
               </th>
               <th className="bg-gray-50 px-6 py-3 text-right">
                 <button
+                  onClick={() => handleSort('voicemail_calls')}
+                  className="flex items-center justify-end space-x-2 font-semibold text-gray-900 hover:text-gray-700"
+                >
+                  {renderSortLabel('voicemail_calls', 'Voicemail')}
+                </button>
+              </th>
+              <th className="bg-gray-50 px-6 py-3 text-right">
+                <button
+                  onClick={() => handleSort('missed_calls')}
+                  className="flex items-center justify-end space-x-2 font-semibold text-gray-900 hover:text-gray-700"
+                >
+                  {renderSortLabel('missed_calls', 'Missed')}
+                </button>
+              </th>
+              <th className="bg-gray-50 px-6 py-3 text-right">
+                <button
+                  onClick={() => handleSort('missed_percent')}
+                  className="flex items-center justify-end space-x-2 font-semibold text-gray-900 hover:text-gray-700"
+                >
+                  {renderSortLabel('missed_percent', 'Missed %')}
+                </button>
+              </th>
+              <th className="bg-gray-50 px-6 py-3 text-right">
+                <button
                   onClick={() => handleSort('answer_rate')}
                   className="flex items-center justify-end space-x-2 font-semibold text-gray-900 hover:text-gray-700"
                 >
@@ -467,7 +526,7 @@ export default function QueuePerformanceReportPage() {
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={8} className="py-8 text-center">
+                <td colSpan={11} className="py-8 text-center">
                   <div className="flex items-center justify-center space-x-2">
                     <div className="h-6 w-6 animate-spin rounded-full border-2 border-blue-300 border-t-blue-600"></div>
                     <span className="text-gray-600">Loading report...</span>
@@ -476,7 +535,7 @@ export default function QueuePerformanceReportPage() {
               </tr>
             ) : displayData.length === 0 ? (
               <tr>
-                <td colSpan={8} className="py-8 text-center">
+                <td colSpan={11} className="py-8 text-center">
                   <AlertCircle className="mx-auto mb-2 text-gray-400" size={32} />
                   <p className="text-gray-600">No queue data available for the selected date range</p>
                 </td>
@@ -504,6 +563,15 @@ export default function QueuePerformanceReportPage() {
                     </td>
                     <td className="px-6 py-4 text-right text-gray-900">
                       {row.abandoned}
+                    </td>
+                    <td className="px-6 py-4 text-right text-gray-900">
+                      {row.voicemail_calls ?? 0}
+                    </td>
+                    <td className="px-6 py-4 text-right text-gray-900">
+                      {row.missed_calls ?? 0}
+                    </td>
+                    <td className="px-6 py-4 text-right text-gray-900">
+                      {(row.missed_percent ?? 0).toFixed(2)}%
                     </td>
                     <td className="px-6 py-4 text-right text-gray-900">
                       {answerRate}%
@@ -538,6 +606,15 @@ export default function QueuePerformanceReportPage() {
                   {totals.abandoned}
                 </td>
                 <td className="px-6 py-4 text-right text-gray-900">
+                  {totals.voicemail_calls}
+                </td>
+                <td className="px-6 py-4 text-right text-gray-900">
+                  {totals.missed_calls}
+                </td>
+                <td className="px-6 py-4 text-right text-gray-900">
+                  {totals.missed_percent.toFixed(2)}%
+                </td>
+                <td className="px-6 py-4 text-right text-gray-900">
                   {totals.offered > 0
                     ? ((totals.answered / totals.offered) * 100).toFixed(2)
                     : '0'}
@@ -567,7 +644,7 @@ export default function QueuePerformanceReportPage() {
               <p className="font-semibold mb-1">Queue Entry Attribution</p>
               <p>
                 Each row is based on unique queue entries (caller + join time), matching the dashboard KPIs.
-                Transfers that re-enter a queue are counted as new queue entries.
+                Abandoned excludes voicemail, and Missed = Abandoned + Voicemail. Transfers that re-enter a queue are counted as new queue entries.
               </p>
             </div>
           </div>

@@ -98,6 +98,9 @@ export interface ExecutiveOverviewData {
   offered: KPIMetric;
   answerRate: KPIMetric;
   abandonRate: KPIMetric;
+  voicemailCalls?: KPIMetric;
+  missedCalls?: KPIMetric;
+  missedPercent?: KPIMetric;
   serviceLevel: KPIMetric;
   asa: KPIMetric;
   aht: KPIMetric;
@@ -174,8 +177,11 @@ export interface QueuePerformanceData {
     offered: MetricValue;
     answered: MetricValue;
     abandoned: MetricValue;
+    voicemail_calls?: MetricValue;
+    missed_calls?: MetricValue;
     answer_rate: MetricValue;
     abandon_rate: MetricValue;
+    missed_percent?: MetricValue;
     asa_avg: MetricValue;
     asa_p90: MetricValue;
     aht_avg: MetricValue;
@@ -220,6 +226,8 @@ export interface HourlyMetrics {
   offered: number;
   answered: number;
   abandoned: number;
+  voicemail?: number;
+  missed?: number;
   service_level: number; // percentage
   asa: number | null; // seconds, null if no answered calls
   aht: number | null; // seconds, null if no answered calls
@@ -233,8 +241,11 @@ export interface QueuePerformanceHourlyData {
     offered: MetricValue;
     answered: MetricValue;
     abandoned: MetricValue;
+    voicemail_calls?: MetricValue;
+    missed_calls?: MetricValue;
     answer_rate: MetricValue;
     abandon_rate: MetricValue;
+    missed_percent?: MetricValue;
     asa_avg: MetricValue;
     aht_avg: MetricValue;
     service_level: MetricValue;
@@ -419,6 +430,9 @@ export interface QueueReportRow {
   offered: number;
   answered: number;
   abandoned: number;
+  voicemail_calls?: number;
+  missed_calls?: number;
+  missed_percent?: number;
   service_level_30: number;
   asa_sec: number;
   aht_sec: number;

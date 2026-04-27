@@ -16,6 +16,7 @@ const OutboundCalls = React.lazy(() => import('./pages/OutboundCalls'));
 const Wallboard = React.lazy(() => import('./pages/Wallboard'));
 const QualityHealth = React.lazy(() => import('./pages/QualityHealth'));
 const RepeatCallers = React.lazy(() => import('./pages/RepeatCallers'));
+const DayComparer = React.lazy(() => import('./pages/DayComparer'));
 const AdminSettings = React.lazy(() => import('./pages/AdminSettings'));
 
 function App() {
@@ -81,6 +82,7 @@ function App() {
               element={currentUser?.role === 'super_admin' ? <QualityHealth /> : <Navigate to="/executive-overview" replace />}
             />
             <Route path="/repeat-callers" element={<RepeatCallers />} />
+            <Route path="/day-comparer" element={<DayComparer />} />
             <Route path="/admin/settings" element={<AdminSettings />} />
             <Route path="*" element={<Navigate to="/executive-overview" replace />} />
           </Routes>

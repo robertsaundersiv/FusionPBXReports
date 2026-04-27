@@ -32,7 +32,7 @@ export default function QueuePerformanceCard({ queueData, groupPrefix }: QueuePe
   const metricConfig: Record<ChartMetric, { label: string; color: string; unit: string }> = {
     offered: { label: 'Offered', color: '#0ea5e9', unit: 'calls' },
     answered: { label: 'Answered', color: '#10b981', unit: 'calls' },
-    abandoned: { label: 'Abandoned', color: '#ef4444', unit: 'calls' },
+    abandoned: { label: 'Abandoned (No VM)', color: '#ef4444', unit: 'calls' },
     service_level: { label: 'Service Level %', color: '#8b5cf6', unit: '%' },
     asa: { label: 'ASA', color: '#f59e0b', unit: 'sec' },
     aht: { label: 'AHT', color: '#06b6d4', unit: 'sec' },
@@ -91,7 +91,7 @@ export default function QueuePerformanceCard({ queueData, groupPrefix }: QueuePe
           >
             <option value="offered">Offered</option>
             <option value="answered">Answered</option>
-            <option value="abandoned">Abandoned</option>
+            <option value="abandoned">Abandoned (No VM)</option>
             <option value="service_level">Service Level %</option>
             <option value="asa">ASA</option>
             <option value="aht">AHT</option>
@@ -101,7 +101,7 @@ export default function QueuePerformanceCard({ queueData, groupPrefix }: QueuePe
       </div>
 
       {/* KPI Tiles */}
-      <div className="grid grid-cols-4 gap-3 mb-6">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
         <div className="bg-blue-50 p-3 rounded-lg">
           <div className="text-xs font-medium text-blue-600 mb-1">Offered</div>
           <div className="text-xl font-bold text-gray-900">{formatCount(metrics.offered.value)}</div>
@@ -111,14 +111,22 @@ export default function QueuePerformanceCard({ queueData, groupPrefix }: QueuePe
           <div className="text-xl font-bold text-gray-900">{formatCount(metrics.answered.value)}</div>
         </div>
         <div className="bg-red-50 p-3 rounded-lg">
-          <div className="text-xs font-medium text-red-600 mb-1">Abandoned</div>
+          <div className="text-xs font-medium text-red-600 mb-1">Abandoned (No VM)</div>
           <div className="text-xl font-bold text-gray-900">{formatCount(metrics.abandoned.value)}</div>
+        </div>
+        <div className="bg-amber-50 p-3 rounded-lg">
+          <div className="text-xs font-medium text-amber-700 mb-1">Voicemail</div>
+          <div className="text-xl font-bold text-gray-900">{formatCount(metrics.voicemail_calls?.value ?? 0)}</div>
+        </div>
+        <div className="bg-rose-50 p-3 rounded-lg">
+          <div className="text-xs font-medium text-rose-700 mb-1">Missed</div>
+          <div className="text-xl font-bold text-gray-900">{formatCount(metrics.missed_calls?.value ?? 0)}</div>
         </div>
         <div className="bg-purple-50 p-3 rounded-lg">
           <div className="text-xs font-medium text-purple-600 mb-1">SL (30s)</div>
           <div className="text-xl font-bold text-gray-900">{formatPercentage(metrics.service_level.value)}</div>
         </div>
-        <div className="bg-amber-50 p-3 rounded-lg">
+        <div className="bg-yellow-50 p-3 rounded-lg">
           <div className="text-xs font-medium text-amber-600 mb-1">ASA</div>
           <div className="text-xl font-bold text-gray-900">{formatSecondsToTime(metrics.asa_avg.value)}</div>
         </div>

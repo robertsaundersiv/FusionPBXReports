@@ -32,13 +32,17 @@ _redis_client = None
 
 QUEUE_ANALYTICS_COLUMNS = (
     CDRRecord.caller_id_number,
+    CDRRecord.caller_destination,
+    CDRRecord.destination_number,
     CDRRecord.start_epoch,
     CDRRecord.billsec,
     CDRRecord.hangup_cause,
     CDRRecord.last_app,
+    CDRRecord.last_arg,
     CDRRecord.call_disposition,
     CDRRecord.cc_cause,
     CDRRecord.cc_agent_type,
+    CDRRecord.voicemail_message,
     CDRRecord.hold_accum_seconds,
     CDRRecord.rtp_audio_in_mos,
     CDRRecord.cc_queue_joined_epoch,
@@ -120,6 +124,33 @@ def local_timestamp_expr(epoch_column, timezone_name: str):
     return func.timezone(timezone_name, func.to_timestamp(epoch_column))
 
 
+def is_voicemail_routed_record(record) -> bool:
+    """Return True when a single CDR leg shows voicemail routing signals."""
+    last_app = (getattr(record, "last_app", "") or "").lower()
+    last_arg = (getattr(record, "last_arg", "") or "").lower()
+    call_disposition = (getattr(record, "call_disposition", "") or "").lower()
+    agent_type = (getattr(record, "cc_agent_type", "") or "").lower()
+    voicemail_message = getattr(record, "voicemail_message", None)
+    destination_number = (getattr(record, "destination_number", "") or "")
+    caller_destination = (getattr(record, "caller_destination", "") or "")
+
+    if last_app == "voicemail":
+        return True
+    if call_disposition == "voicemail":
+        return True
+    if agent_type == "voicemail":
+        return True
+    if voicemail_message:
+        return True
+    if "voicemail" in last_arg:
+        return True
+    # FusionPBX often routes to voicemail feature code *99xxxxxx.
+    if destination_number.startswith("*99") or caller_destination.startswith("*99"):
+        return True
+
+    return False
+
+
 def is_queue_entry_answered(records, strict_answered: bool = False) -> bool:
     """Return True when any record indicates the queue interaction was answered.
 
@@ -136,7 +167,51 @@ def is_queue_entry_answered(records, strict_answered: bool = False) -> bool:
 
     for record in records:
         hangup_cause = (getattr(record, "hangup_cause", "") or "").upper()
+        # Do not treat voicemail-routed legs as queue-answered entries.
+        if is_voicemail_routed_record(record):
+            continue
         if getattr(record, "answer_epoch", None) is not None and hangup_cause == "NORMAL_CLEARING":
+            return True
+
+    return False
+
+
+def is_queue_entry_voicemail(records, strict_answered: bool = False) -> bool:
+    """Return True when a queue entry was not answered and ended in voicemail."""
+    if is_queue_entry_answered(records, strict_answered=strict_answered):
+        return False
+
+    for record in records:
+        if is_voicemail_routed_record(record):
+            return True
+
+    return False
+
+
+def is_queue_entry_abandoned(
+    records,
+    strict_answered: bool = False,
+    exclude_deflects: bool = True,
+) -> bool:
+    """Return True for queue entries abandoned before answer, excluding voicemail."""
+    if is_queue_entry_answered(records, strict_answered=strict_answered):
+        return False
+
+    if is_queue_entry_voicemail(records, strict_answered=strict_answered):
+        return False
+
+    for record in records:
+        if (record.billsec or 0) != 0:
+            continue
+        if exclude_deflects and (getattr(record, "last_app", None) or "") == "deflect":
+            continue
+        if (record.hangup_cause or "") == "BLIND_TRANSFER":
+            continue
+        if (
+            (record.hangup_cause in ("ORIGINATOR_CANCEL", "NO_ANSWER", "USER_BUSY"))
+            or ((getattr(record, "cc_cause", None) or "") == "TIMEOUT")
+            or ((getattr(record, "call_disposition", None) or "") == "missed")
+        ):
             return True
 
     return False
@@ -325,45 +400,18 @@ async def get_executive_overview(
             unique_queue_entries[key] = []
         unique_queue_entries[key].append(record)
     
-    # Helper function to determine if a queue entry is truly abandoned
-    def is_true_abandoned(records):
-        """
-        Determine if a group of CDR records representing a single queue entry
-        is a true abandoned call based on FusionPBX logic.
-        """
-        # If any record was answered, not abandoned
-        if is_queue_entry_answered(records):
-            return False
-        
-        # Check if any record matches abandoned criteria
-        for record in records:
-            # Must have billsec = 0
-            if (record.billsec or 0) != 0:
-                continue
-            
-            # Exclude deflects and blind transfers
-            if (getattr(record, 'last_app', None) or '') == 'deflect':
-                continue
-            if (record.hangup_cause or '') == 'BLIND_TRANSFER':
-                continue
-            
-            # Must show caller-abandoned behavior
-            if (record.hangup_cause in ('ORIGINATOR_CANCEL', 'NO_ANSWER', 'USER_BUSY') or
-                (getattr(record, 'cc_cause', None) or '') == 'TIMEOUT' or
-                (getattr(record, 'call_disposition', None) or '') == 'missed'):
-                return True
-        
-        return False
-    
     # Count outcomes
     total_offered_queue = len(unique_queue_entries)
     total_answered = sum(1 for records in unique_queue_entries.values() 
                         if is_queue_entry_answered(records))
+    total_voicemail = sum(1 for records in unique_queue_entries.values()
+                          if is_queue_entry_voicemail(records))
     total_abandoned = sum(1 for records in unique_queue_entries.values()
-                         if is_true_abandoned(records))
+                         if is_queue_entry_abandoned(records))
+    total_missed = total_abandoned + total_voicemail
     
     # Verify counts add up
-    other = total_offered_queue - total_answered - total_abandoned
+    other = total_offered_queue - total_answered - total_abandoned - total_voicemail
     if other > 0:
         logger.warning(
             "Queue analytics found uncategorized entries",
@@ -371,12 +419,15 @@ async def get_executive_overview(
                 "offered": total_offered_queue,
                 "answered": total_answered,
                 "abandoned": total_abandoned,
+                "voicemail": total_voicemail,
+                "missed": total_missed,
                 "other": other,
             },
         )
     
     answer_rate = (total_answered / total_offered_queue * 100) if total_offered_queue > 0 else 0
     abandon_rate = (total_abandoned / total_offered_queue * 100) if total_offered_queue > 0 else 0
+    missed_percent = (total_missed / total_offered_queue * 100) if total_offered_queue > 0 else 0
     
     # Core aggregates aligned to answered queue-entry classification.
     answered_entry_records = [records for records in unique_queue_entries.values() if is_queue_entry_answered(records)]
@@ -655,29 +706,7 @@ async def get_executive_overview(
     
     # Helper function to determine if a queue entry is truly abandoned (same as above)
     def is_true_abandoned_for_queue(records):
-        # If any record was answered, not abandoned
-        if is_queue_entry_answered(records):
-            return False
-        
-        # Check if any record matches abandoned criteria
-        for record in records:
-            # Must have billsec = 0
-            if (record.billsec or 0) != 0:
-                continue
-            
-            # Exclude deflects and blind transfers
-            if (getattr(record, 'last_app', None) or '') == 'deflect':
-                continue
-            if (record.hangup_cause or '') == 'BLIND_TRANSFER':
-                continue
-            
-            # Must show caller-abandoned behavior
-            if (record.hangup_cause in ('ORIGINATOR_CANCEL', 'NO_ANSWER', 'USER_BUSY') or
-                (getattr(record, 'cc_cause', None) or '') == 'TIMEOUT' or
-                (getattr(record, 'call_disposition', None) or '') == 'missed'):
-                return True
-        
-        return False
+        return is_queue_entry_abandoned(records)
     
     # Now attribute each entry to a queue and track answered/abandoned status
     queue_stats = {}
@@ -743,7 +772,25 @@ async def get_executive_overview(
             'name': 'Abandon Rate',
             'value': abandon_rate,
             'unit': '%',
-            'definition': KPIDefinitions.SERVICE_LEVEL['abandon_rate']['description'],
+            'definition': 'Percentage of queue-offered calls abandoned before answer, excluding callers who left voicemail.',
+        },
+        'voicemailCalls': {
+            'name': 'Voicemail Calls',
+            'value': total_voicemail,
+            'unit': 'calls',
+            'definition': 'Queue callers who were not answered by an agent and left a voicemail.',
+        },
+        'missedCalls': {
+            'name': 'Missed Calls',
+            'value': total_missed,
+            'unit': 'calls',
+            'definition': 'Total missed calls, defined as abandoned calls plus voicemail calls.',
+        },
+        'missedPercent': {
+            'name': 'Missed %',
+            'value': missed_percent,
+            'unit': '%',
+            'definition': 'Missed calls divided by total queue-offered calls.',
         },
         'serviceLevel': {
             'name': 'Service Level %',
@@ -943,38 +990,28 @@ async def get_queue_performance(
                 unique_queue_entries[key] = []
             unique_queue_entries[key].append(record)
         
-        # Helper function to determine if a queue entry is truly abandoned
-        def is_true_abandoned(records):
-            if is_queue_entry_answered(records, strict_answered=strict_answered):
-                return False
-            for record in records:
-                if (record.billsec or 0) != 0:
-                    continue
-                if (getattr(record, 'last_app', None) or '') == 'deflect':
-                    continue
-                if (record.hangup_cause or '') == 'BLIND_TRANSFER':
-                    continue
-                if (record.hangup_cause in ('ORIGINATOR_CANCEL', 'NO_ANSWER', 'USER_BUSY') or
-                    (getattr(record, 'cc_cause', None) or '') == 'TIMEOUT' or
-                    (getattr(record, 'call_disposition', None) or '') == 'missed'):
-                    return True
-            return False
-        
         # Count outcomes
         total_offered = len(unique_queue_entries)
         entry_is_answered = {
             key: is_queue_entry_answered(records, strict_answered=strict_answered)
             for key, records in unique_queue_entries.items()
         }
+        entry_is_voicemail = {
+            key: is_queue_entry_voicemail(records, strict_answered=strict_answered)
+            for key, records in unique_queue_entries.items()
+        }
         entry_is_abandoned = {
-            key: is_true_abandoned(records)
+            key: is_queue_entry_abandoned(records, strict_answered=strict_answered)
             for key, records in unique_queue_entries.items()
         }
         total_answered = sum(1 for is_answered in entry_is_answered.values() if is_answered)
+        total_voicemail = sum(1 for is_voicemail in entry_is_voicemail.values() if is_voicemail)
         total_abandoned = sum(1 for is_abandoned in entry_is_abandoned.values() if is_abandoned)
+        total_missed = total_abandoned + total_voicemail
         
         answer_rate = (total_answered / total_offered * 100) if total_offered > 0 else 0
         abandon_rate = (total_abandoned / total_offered * 100) if total_offered > 0 else 0
+        missed_percent = (total_missed / total_offered * 100) if total_offered > 0 else 0
         
         # ASA calculations (entry-based, aligned to answered-entry logic)
         asa_times = [
@@ -1091,7 +1128,9 @@ async def get_queue_performance(
         call_outcomes = {
             "answered": total_answered,
             "abandoned": total_abandoned,
-            "other": total_offered - total_answered - total_abandoned
+            "voicemail": total_voicemail,
+            "missed": total_missed,
+            "other": total_offered - total_answered - total_missed
         }
         
         call_outcomes_list = [
@@ -1137,9 +1176,12 @@ async def get_queue_performance(
             answered_count = sum(1 for records in bucket_entries.values() 
                                if is_queue_entry_answered(records, strict_answered=strict_answered))
             
-            # Count abandoned
+            # Count voicemail and abandoned
+            voicemail_count = sum(1 for records in bucket_entries.values()
+                                  if is_queue_entry_voicemail(records, strict_answered=strict_answered))
             abandoned_count = sum(1 for records in bucket_entries.values()
-                                if is_true_abandoned(records))
+                                  if is_queue_entry_abandoned(records, strict_answered=strict_answered))
+            missed_count = abandoned_count + voicemail_count
             
             # Service level / ASA use entry-level answered waits.
             hour_asa_times = [
@@ -1177,6 +1219,8 @@ async def get_queue_performance(
                 "offered": offered_count,
                 "answered": answered_count,
                 "abandoned": abandoned_count,
+                "voicemail": voicemail_count,
+                "missed": missed_count,
                 "service_level": round(hour_service_level, 2),
                 "asa": round(hour_asa, 2) if hour_asa is not None else None,
                 "aht": round(hour_aht, 2) if hour_aht is not None else None,
@@ -1191,8 +1235,11 @@ async def get_queue_performance(
                 "offered": {"value": total_offered, "unit": "calls"},
                 "answered": {"value": total_answered, "unit": "calls"},
                 "abandoned": {"value": total_abandoned, "unit": "calls"},
+                "voicemail_calls": {"value": total_voicemail, "unit": "calls"},
+                "missed_calls": {"value": total_missed, "unit": "calls"},
                 "answer_rate": {"value": round(answer_rate, 2), "unit": "%"},
                 "abandon_rate": {"value": round(abandon_rate, 2), "unit": "%"},
+                "missed_percent": {"value": round(missed_percent, 2), "unit": "%"},
                 "asa_avg": {"value": round(avg_asa, 2), "unit": "seconds"},
                 "asa_p90": {"value": round(asa_p90, 2), "unit": "seconds"},
                 "aht_avg": {"value": round(avg_aht, 2), "unit": "seconds"},
@@ -1321,24 +1368,6 @@ async def get_queue_performance_report(
     # STEP 3: Calculate metrics per queue extension
     # ======================================================================
 
-    def is_true_abandoned(records):
-        if is_queue_entry_answered(records, strict_answered=strict_answered):
-            return False
-
-        for record in records:
-            if (record.billsec or 0) != 0:
-                continue
-            if exclude_deflects and (getattr(record, 'last_app', None) or '') == 'deflect':
-                continue
-            if (record.hangup_cause or '') == 'BLIND_TRANSFER':
-                continue
-            if (record.hangup_cause in ('ORIGINATOR_CANCEL', 'NO_ANSWER', 'USER_BUSY') or
-                (getattr(record, 'cc_cause', None) or '') == 'TIMEOUT' or
-                (getattr(record, 'call_disposition', None) or '') == 'missed'):
-                return True
-
-        return False
-
     results = []
 
     for extension, entry_map in sorted(queue_entries.items()):
@@ -1346,7 +1375,16 @@ async def get_queue_performance_report(
         offered = len(entry_map)
         answered = sum(1 for records in entry_map.values()
                        if is_queue_entry_answered(records, strict_answered=strict_answered))
-        abandoned = sum(1 for records in entry_map.values() if is_true_abandoned(records))
+        voicemail_calls = sum(1 for records in entry_map.values()
+                              if is_queue_entry_voicemail(records, strict_answered=strict_answered))
+        abandoned = sum(1 for records in entry_map.values()
+                        if is_queue_entry_abandoned(
+                            records,
+                            strict_answered=strict_answered,
+                            exclude_deflects=exclude_deflects,
+                        ))
+        missed_calls = abandoned + voicemail_calls
+        missed_percent = (missed_calls / offered * 100) if offered > 0 else 0
 
         # ASA and service level use answered queue entries (not raw record rows).
         asa_times = [
@@ -1380,6 +1418,9 @@ async def get_queue_performance_report(
             'offered': offered,
             'answered': answered,
             'abandoned': abandoned,
+            'voicemail_calls': voicemail_calls,
+            'missed_calls': missed_calls,
+            'missed_percent': round(missed_percent, 2),
             'service_level_30': round(service_level_30, 2),
             'asa_sec': round(asa_sec, 2),
             'aht_sec': round(aht_sec, 2),

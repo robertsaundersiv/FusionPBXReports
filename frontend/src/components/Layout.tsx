@@ -25,10 +25,11 @@ export default function Layout({ children, currentUser }: LayoutProps) {
     { name: 'Agent Performance', href: '/agent-performance' },
     { name: 'Agent Performance Report', href: '/agent-performance-report' },
     { name: 'Outbound Calls', href: '/outbound-calls' },
+    { name: 'Repeat Callers', href: '/repeat-callers' },
+    { name: 'Day Comparer', href: '/day-comparer' },
     ...(currentUser?.role === 'super_admin'
       ? [{ name: 'Quality & Health', href: '/quality-health' }]
       : []),
-    { name: 'Repeat Callers', href: '/repeat-callers' },
     { name: 'Settings', href: '/admin/settings' },
   ];
 
