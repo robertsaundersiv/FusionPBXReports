@@ -140,8 +140,8 @@ export default function QueuePerformanceReportPage() {
     let filtered: ReportRow[] = data.rows.map((row) => ({
       ...row,
       voicemail_calls: row.voicemail_calls ?? 0,
-      missed_calls: row.missed_calls ?? ((row.abandoned ?? 0) + (row.voicemail_calls ?? 0)),
-      missed_percent: row.missed_percent ?? (row.offered > 0 ? (((row.abandoned ?? 0) + (row.voicemail_calls ?? 0)) / row.offered) * 100 : 0),
+      missed_calls: row.missed_calls ?? 0,
+      missed_percent: row.missed_percent ?? (row.offered > 0 ? ((row.missed_calls ?? 0) / row.offered) * 100 : 0),
       answer_rate: row.offered > 0 ? (row.answered / row.offered) * 100 : 0,
     }));
 
@@ -274,9 +274,9 @@ export default function QueuePerformanceReportPage() {
       'Queue Name',
       'Offered',
       'Answered',
-      'Abandoned (No VM)',
+      'Abandoned (No VM/Transfer)',
       'Voicemail Calls',
-      'Missed Calls',
+      'Missed Calls (Transfer Out)',
       'Missed %',
       'Answer Rate (%)',
       'Service Level 30 (%)',
@@ -385,6 +385,7 @@ export default function QueuePerformanceReportPage() {
           queues={queues}
           agents={agents.filter((agent) => agent.agent_id !== undefined) as { agent_id: string | number; agent_name: string; }[]}
           onFiltersChange={handleFiltersChange}
+          showQueues={true}
           showAgents={false}
           showDirection={false}
           showOutboundToggle={false}
@@ -460,7 +461,7 @@ export default function QueuePerformanceReportPage() {
                   onClick={() => handleSort('abandoned')}
                   className="flex items-center justify-end space-x-2 font-semibold text-gray-900 hover:text-gray-700"
                 >
-                  {renderSortLabel('abandoned', 'Abandoned')}
+                  {renderSortLabel('abandoned', 'Abandoned (No VM/Transfer)')}
                 </button>
               </th>
               <th className="bg-gray-50 px-6 py-3 text-right">
@@ -476,7 +477,7 @@ export default function QueuePerformanceReportPage() {
                   onClick={() => handleSort('missed_calls')}
                   className="flex items-center justify-end space-x-2 font-semibold text-gray-900 hover:text-gray-700"
                 >
-                  {renderSortLabel('missed_calls', 'Missed')}
+                  {renderSortLabel('missed_calls', 'Missed (Transfer Out)')}
                 </button>
               </th>
               <th className="bg-gray-50 px-6 py-3 text-right">
@@ -644,7 +645,8 @@ export default function QueuePerformanceReportPage() {
               <p className="font-semibold mb-1">Queue Entry Attribution</p>
               <p>
                 Each row is based on unique queue entries (caller + join time), matching the dashboard KPIs.
-                Abandoned excludes voicemail, and Missed = Abandoned + Voicemail. Transfers that re-enter a queue are counted as new queue entries.
+                Abandoned excludes voicemail and transfer/deflect outcomes. Missed reflects transfer/deflect outcomes only.
+                Transfers that re-enter a queue are counted as new queue entries.
               </p>
             </div>
           </div>

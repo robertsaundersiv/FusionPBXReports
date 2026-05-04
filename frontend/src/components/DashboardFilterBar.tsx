@@ -71,6 +71,7 @@ export default function DashboardFilterBar({
   const localTimeZone = getBrowserTimeZone();
   const isUtcMode = filters.timezone === 'UTC';
   const [agentSearchTerm, setAgentSearchTerm] = useState('');
+  const [queueSearchTerm, setQueueSearchTerm] = useState('');
 
   const getPresetDateRange = (preset: string) =>
     isUtcMode ? getUtcDateRangeByPreset(preset) : dateUtils.getDateRangeByPreset(preset);
@@ -92,6 +93,31 @@ export default function DashboardFilterBar({
         return agent.agent_name.toLowerCase().includes(normalizedAgentSearchTerm);
       }),
     [normalizedAgentSearchTerm, sortedAgents]
+  );
+
+  const normalizedQueueSearchTerm = queueSearchTerm.trim().toLowerCase();
+
+  const sortedQueues = useMemo(
+    () =>
+      [...queues].sort((a, b) => {
+        const nameA = (a.name || '').toLowerCase();
+        const nameB = (b.name || '').toLowerCase();
+        return nameA.localeCompare(nameB);
+      }),
+    [queues]
+  );
+
+  const filteredQueues = useMemo(
+    () =>
+      sortedQueues.filter((queue) => {
+        if (!normalizedQueueSearchTerm) {
+          return true;
+        }
+
+        const queueName = (queue.name || '').toLowerCase();
+        return queueName.includes(normalizedQueueSearchTerm);
+      }),
+    [normalizedQueueSearchTerm, sortedQueues]
   );
 
   const handleDatePresetChange = (preset: string) => {
@@ -252,28 +278,51 @@ export default function DashboardFilterBar({
 
         {/* Queues */}
         {showQueues && (
-        <div className="space-y-2">
-          <label className="block text-sm font-medium text-gray-700">
-            Queues {filters.queueIds.length > 0 && `(${filters.queueIds.length} selected)`}
-          </label>
-          <select
-            multiple
-            size={4}
-            value={filters.queueIds}
-            onChange={(e) => {
-              const selected = Array.from(e.target.selectedOptions, (option) => option.value);
-              onFiltersChange({ ...filters, queueIds: selected });
-            }}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
-          >
-            {queues.map((queue) => (
-              <option key={queue.queue_id} value={String(queue.queue_id)}>
-                {queue.name || (queue as { queue_name?: string }).queue_name || queue.queue_id}
-              </option>
-            ))}
-          </select>
-          <p className="text-xs text-gray-500">Hold Ctrl/Cmd to select multiple. None = All queues</p>
-        </div>
+          <div className="space-y-2">
+            <label className="block text-sm font-medium text-gray-700">
+              Queues {filters.queueIds.length > 0 && `(${filters.queueIds.length} selected)`}
+            </label>
+            <label className="block text-xs font-medium uppercase tracking-wide text-gray-500">
+              Find queue in list
+            </label>
+            <div className="relative">
+              <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input
+                type="text"
+                value={queueSearchTerm}
+                onChange={(e) => setQueueSearchTerm(e.target.value)}
+                placeholder="Type a queue name to filter the list"
+                aria-label="Search queues list"
+                autoComplete="off"
+                className="w-full rounded-lg border border-gray-300 py-2 pl-9 pr-3 text-sm"
+              />
+            </div>
+            <select
+              multiple
+              size={4}
+              value={filters.queueIds}
+              onChange={(e) => {
+                const visibleSelected = Array.from(e.target.selectedOptions, (option) => option.value);
+                // Build set of values currently visible in the filtered list
+                const visibleValueSet = new Set(
+                  filteredQueues
+                    .map((q) => String(q.queue_id))
+                    .filter(Boolean) as string[]
+                );
+                // Keep selections for queues hidden by the current search term
+                const hiddenSelected = filters.queueIds.filter((id) => !visibleValueSet.has(id));
+                onFiltersChange({ ...filters, queueIds: [...hiddenSelected, ...visibleSelected] });
+              }}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+            >
+              {filteredQueues.map((queue) => (
+                <option key={queue.queue_id} value={String(queue.queue_id)}>
+                  {queue.name || queue.queue_id}
+                </option>
+              ))}
+            </select>
+            <p className="text-xs text-gray-500">Hold Ctrl/Cmd to select multiple. None = All queues</p>
+          </div>
         )}
 
         {/* Agents */}

@@ -28,9 +28,11 @@ WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 EXEC_OVERVIEW_CACHE_TTL = int(os.getenv("EXEC_OVERVIEW_CACHE_TTL", "60"))
 METADATA_CACHE_TTL = int(os.getenv("METADATA_CACHE_TTL", "300"))
+QUEUE_TRANSFER_WINDOW_SECONDS = int(os.getenv("QUEUE_TRANSFER_WINDOW_SECONDS", "600"))
 _redis_client = None
 
 QUEUE_ANALYTICS_COLUMNS = (
+    CDRRecord.xml_cdr_uuid,
     CDRRecord.caller_id_number,
     CDRRecord.caller_destination,
     CDRRecord.destination_number,
@@ -47,6 +49,7 @@ QUEUE_ANALYTICS_COLUMNS = (
     CDRRecord.rtp_audio_in_mos,
     CDRRecord.cc_queue_joined_epoch,
     CDRRecord.cc_queue_answered_epoch,
+    CDRRecord.cc_queue,
 )
 
 
@@ -109,6 +112,9 @@ def to_sunday_first_weekday_index(python_weekday: int) -> int:
 
 def get_requested_timezone(timezone_name: Optional[str]) -> ZoneInfo:
     try:
+        # Handle 'UTC' specially since it's not a valid IANA timezone
+        if timezone_name == 'UTC':
+            return ZoneInfo('Etc/UTC')
         return ZoneInfo(timezone_name or "America/Phoenix")
     except ZoneInfoNotFoundError as exc:
         raise HTTPException(status_code=400, detail=f"Invalid timezone: {timezone_name}") from exc
@@ -121,7 +127,171 @@ def ensure_utc_datetime(value: datetime) -> datetime:
 
 
 def local_timestamp_expr(epoch_column, timezone_name: str):
-    return func.timezone(timezone_name, func.to_timestamp(epoch_column))
+    # PostgreSQL timezone function: use 'Etc/UTC' for proper UTC handling
+    tz_name = 'Etc/UTC' if timezone_name == 'UTC' else timezone_name
+    return func.timezone(tz_name, func.to_timestamp(epoch_column))
+
+
+def attach_voicemail_siblings(
+    db: Session,
+    queue_records: list,
+    queue_entries: dict,
+) -> None:
+    """
+    Fetch voicemail CDR legs that are siblings of queue records (linked via
+    originating_leg_uuid) and attach them to their corresponding queue entry.
+
+    In FusionPBX a queue call that times out and is routed to voicemail typically
+    produces two separate CDR rows:
+      1. The queue leg  – has cc_queue_joined_epoch, cc_cause=TIMEOUT, no voicemail
+         signals.
+      2. The voicemail leg – has last_app/destination signals for voicemail but no
+         cc_queue_joined_epoch, so it is excluded from the base queue query.
+
+    By joining on originating_leg_uuid we can associate the voicemail leg back to
+    the right queue entry so that is_queue_entry_voicemail() returns True.
+    """
+    # Build uuid → (extension, entry_key) map from queue records.
+    uuid_to_ext_entry: dict = {}
+    for record in queue_records:
+        uuid = getattr(record, "xml_cdr_uuid", None)
+        if not uuid:
+            continue
+        cc_queue = getattr(record, "cc_queue", "") or ""
+        extension = cc_queue.split("@", 1)[0] if "@" in cc_queue else cc_queue
+        if not extension:
+            continue
+        entry_key = (record.caller_id_number, record.cc_queue_joined_epoch)
+        uuid_to_ext_entry[uuid] = (extension, entry_key)
+
+    if not uuid_to_ext_entry:
+        return
+
+    queue_uuids = list(uuid_to_ext_entry.keys())
+
+    # Fetch voicemail sibling records in a single query.
+    # Chunk to avoid excessively large IN lists.
+    CHUNK = 500
+    vm_siblings: list = []
+    for i in range(0, len(queue_uuids), CHUNK):
+        chunk = queue_uuids[i : i + CHUNK]
+        rows = (
+            db.query(CDRRecord)
+            .filter(
+                CDRRecord.originating_leg_uuid.in_(chunk),
+                or_(
+                    CDRRecord.last_app == "voicemail",
+                    CDRRecord.call_disposition == "voicemail",
+                    CDRRecord.cc_agent_type == "voicemail",
+                    CDRRecord.destination_number.like("*99%"),
+                    CDRRecord.caller_destination.like("*99%"),
+                ),
+            )
+            .options(
+                load_only(
+                    CDRRecord.xml_cdr_uuid,
+                    CDRRecord.originating_leg_uuid,
+                    CDRRecord.last_app,
+                    CDRRecord.last_arg,
+                    CDRRecord.call_disposition,
+                    CDRRecord.cc_agent_type,
+                    CDRRecord.voicemail_message,
+                    CDRRecord.destination_number,
+                    CDRRecord.caller_destination,
+                    CDRRecord.billsec,
+                    CDRRecord.hangup_cause,
+                    CDRRecord.cc_queue_joined_epoch,
+                    CDRRecord.cc_queue_answered_epoch,
+                )
+            )
+            .all()
+        )
+        vm_siblings.extend(rows)
+
+    for vm_rec in vm_siblings:
+        orig_uuid = getattr(vm_rec, "originating_leg_uuid", None)
+        if orig_uuid not in uuid_to_ext_entry:
+            continue
+        extension, entry_key = uuid_to_ext_entry[orig_uuid]
+        if extension in queue_entries and entry_key in queue_entries[extension]:
+            queue_entries[extension][entry_key].append(vm_rec)
+
+
+def compute_queue_hop_transfer_keys(
+    db: Session,
+    start_epoch: int,
+    end_epoch: int,
+    queue_entries: dict,
+    direction: str = "inbound",
+    transfer_window_seconds: int = QUEUE_TRANSFER_WINDOW_SECONDS,
+) -> Set[tuple]:
+    """Detect source queue entries that hop to another queue shortly after join.
+
+    Returns a set of keys in the form (extension, caller_id_number, joined_epoch)
+    for entries that have a later queue entry for the same caller in a different
+    queue within transfer_window_seconds.
+    """
+    source_entries = []
+    caller_numbers = set()
+
+    for extension, entry_map in queue_entries.items():
+        for caller, joined_epoch in entry_map.keys():
+            if not caller or joined_epoch is None:
+                continue
+            source_entries.append((extension, caller, joined_epoch))
+            caller_numbers.add(caller)
+
+    if not source_entries or not caller_numbers:
+        return set()
+
+    # Build caller -> list[(joined_epoch, extension)] across all queues so we can
+    # detect queue-to-queue hops even when destination queue isn't in current filter.
+    caller_timelines = {}
+    caller_list = list(caller_numbers)
+    CHUNK = 500
+    for i in range(0, len(caller_list), CHUNK):
+        caller_chunk = caller_list[i : i + CHUNK]
+        rows = (
+            db.query(
+                CDRRecord.caller_id_number,
+                CDRRecord.cc_queue_joined_epoch,
+                CDRRecord.cc_queue,
+            )
+            .filter(
+                CDRRecord.start_epoch >= start_epoch,
+                CDRRecord.start_epoch <= end_epoch,
+                CDRRecord.cc_queue_joined_epoch.isnot(None),
+                CDRRecord.direction == direction,
+                CDRRecord.caller_id_number.in_(caller_chunk),
+            )
+            .all()
+        )
+        for caller, joined_epoch, cc_queue in rows:
+            if not caller or joined_epoch is None:
+                continue
+            cc_queue_val = cc_queue or ""
+            ext = cc_queue_val.split("@", 1)[0] if "@" in cc_queue_val else cc_queue_val
+            if not ext:
+                continue
+            caller_timelines.setdefault(caller, []).append((joined_epoch, ext))
+
+    for caller in caller_timelines:
+        caller_timelines[caller].sort(key=lambda x: x[0])
+
+    transferred_keys = set()
+    for extension, caller, joined_epoch in source_entries:
+        timeline = caller_timelines.get(caller, [])
+        for later_joined, later_ext in timeline:
+            if later_joined <= joined_epoch:
+                continue
+            if later_joined - joined_epoch > transfer_window_seconds:
+                # Timeline is sorted; later rows will only be farther away.
+                break
+            if later_ext != extension:
+                transferred_keys.add((extension, caller, joined_epoch))
+                break
+
+    return transferred_keys
 
 
 def is_voicemail_routed_record(record) -> bool:
@@ -188,16 +358,49 @@ def is_queue_entry_voicemail(records, strict_answered: bool = False) -> bool:
     return False
 
 
+def is_queue_entry_transferred_out(records, strict_answered: bool = False) -> bool:
+    """Return True for unanswered queue entries transferred/deflected out of queue."""
+    if is_queue_entry_answered(records, strict_answered=strict_answered):
+        return False
+
+    if is_queue_entry_voicemail(records, strict_answered=strict_answered):
+        return False
+
+    for record in records:
+        last_app = (getattr(record, "last_app", "") or "").lower()
+        call_disposition = (getattr(record, "call_disposition", "") or "").lower()
+        cc_cancel_reason = (getattr(record, "cc_cancel_reason", "") or "").lower()
+        hangup_cause = (getattr(record, "hangup_cause", "") or "").upper()
+
+        if last_app in ("deflect", "transfer"):
+            return True
+        if call_disposition in ("transfer", "transferred"):
+            return True
+        if "transfer" in cc_cancel_reason:
+            return True
+        if hangup_cause in ("BLIND_TRANSFER", "LOSE_RACE"):
+            return True
+
+    return False
+
+
 def is_queue_entry_abandoned(
     records,
     strict_answered: bool = False,
     exclude_deflects: bool = True,
 ) -> bool:
-    """Return True for queue entries abandoned before answer, excluding voicemail."""
+    """Return True for queue entries abandoned before answer.
+
+    Abandoned excludes queue entries that were transferred/deflected out of
+    queue or routed to voicemail.
+    """
     if is_queue_entry_answered(records, strict_answered=strict_answered):
         return False
 
     if is_queue_entry_voicemail(records, strict_answered=strict_answered):
+        return False
+
+    if is_queue_entry_transferred_out(records, strict_answered=strict_answered):
         return False
 
     for record in records:
@@ -408,10 +611,11 @@ async def get_executive_overview(
                           if is_queue_entry_voicemail(records))
     total_abandoned = sum(1 for records in unique_queue_entries.values()
                          if is_queue_entry_abandoned(records))
-    total_missed = total_abandoned + total_voicemail
+    total_missed = sum(1 for records in unique_queue_entries.values()
+                       if is_queue_entry_transferred_out(records))
     
     # Verify counts add up
-    other = total_offered_queue - total_answered - total_abandoned - total_voicemail
+    other = total_offered_queue - total_answered - total_abandoned - total_voicemail - total_missed
     if other > 0:
         logger.warning(
             "Queue analytics found uncategorized entries",
@@ -772,7 +976,7 @@ async def get_executive_overview(
             'name': 'Abandon Rate',
             'value': abandon_rate,
             'unit': '%',
-            'definition': 'Percentage of queue-offered calls abandoned before answer, excluding callers who left voicemail.',
+            'definition': 'Percentage of queue-offered calls abandoned before answer, excluding voicemail and transfer/deflect outcomes.',
         },
         'voicemailCalls': {
             'name': 'Voicemail Calls',
@@ -784,7 +988,7 @@ async def get_executive_overview(
             'name': 'Missed Calls',
             'value': total_missed,
             'unit': 'calls',
-            'definition': 'Total missed calls, defined as abandoned calls plus voicemail calls.',
+            'definition': 'Queue callers transferred or deflected out of queue before answer.',
         },
         'missedPercent': {
             'name': 'Missed %',
@@ -989,7 +1193,52 @@ async def get_queue_performance(
             if key not in unique_queue_entries:
                 unique_queue_entries[key] = []
             unique_queue_entries[key].append(record)
-        
+
+        # Attach voicemail sibling records (CDR legs with no cc_queue_joined_epoch
+        # that are linked to queue records via originating_leg_uuid).
+        uuid_to_entry_key = {
+            r.xml_cdr_uuid: (r.caller_id_number, r.cc_queue_joined_epoch)
+            for r in queue_records
+            if getattr(r, "xml_cdr_uuid", None)
+        }
+        if uuid_to_entry_key:
+            vm_sibs = (
+                db.query(CDRRecord)
+                .filter(
+                    CDRRecord.originating_leg_uuid.in_(list(uuid_to_entry_key.keys())),
+                    or_(
+                        CDRRecord.last_app == "voicemail",
+                        CDRRecord.call_disposition == "voicemail",
+                        CDRRecord.cc_agent_type == "voicemail",
+                        CDRRecord.destination_number.like("*99%"),
+                        CDRRecord.caller_destination.like("*99%"),
+                    ),
+                )
+                .options(
+                    load_only(
+                        CDRRecord.originating_leg_uuid,
+                        CDRRecord.last_app,
+                        CDRRecord.last_arg,
+                        CDRRecord.call_disposition,
+                        CDRRecord.cc_agent_type,
+                        CDRRecord.voicemail_message,
+                        CDRRecord.destination_number,
+                        CDRRecord.caller_destination,
+                        CDRRecord.billsec,
+                        CDRRecord.hangup_cause,
+                        CDRRecord.cc_queue_joined_epoch,
+                        CDRRecord.cc_queue_answered_epoch,
+                    )
+                )
+                .all()
+            )
+            for vm_rec in vm_sibs:
+                orig_uuid = getattr(vm_rec, "originating_leg_uuid", None)
+                if orig_uuid in uuid_to_entry_key:
+                    key = uuid_to_entry_key[orig_uuid]
+                    if key in unique_queue_entries:
+                        unique_queue_entries[key].append(vm_rec)
+
         # Count outcomes
         total_offered = len(unique_queue_entries)
         entry_is_answered = {
@@ -1004,10 +1253,14 @@ async def get_queue_performance(
             key: is_queue_entry_abandoned(records, strict_answered=strict_answered)
             for key, records in unique_queue_entries.items()
         }
+        entry_is_transferred_out = {
+            key: is_queue_entry_transferred_out(records, strict_answered=strict_answered)
+            for key, records in unique_queue_entries.items()
+        }
         total_answered = sum(1 for is_answered in entry_is_answered.values() if is_answered)
         total_voicemail = sum(1 for is_voicemail in entry_is_voicemail.values() if is_voicemail)
         total_abandoned = sum(1 for is_abandoned in entry_is_abandoned.values() if is_abandoned)
-        total_missed = total_abandoned + total_voicemail
+        total_missed = sum(1 for is_missed in entry_is_transferred_out.values() if is_missed)
         
         answer_rate = (total_answered / total_offered * 100) if total_offered > 0 else 0
         abandon_rate = (total_abandoned / total_offered * 100) if total_offered > 0 else 0
@@ -1181,7 +1434,8 @@ async def get_queue_performance(
                                   if is_queue_entry_voicemail(records, strict_answered=strict_answered))
             abandoned_count = sum(1 for records in bucket_entries.values()
                                   if is_queue_entry_abandoned(records, strict_answered=strict_answered))
-            missed_count = abandoned_count + voicemail_count
+            missed_count = sum(1 for records in bucket_entries.values()
+                               if is_queue_entry_transferred_out(records, strict_answered=strict_answered))
             
             # Service level / ASA use entry-level answered waits.
             hour_asa_times = [
@@ -1364,6 +1618,20 @@ async def get_queue_performance_report(
         queue_entries[extension][entry_key].append(record)
         queue_records_by_extension[extension].append(record)
 
+    # Attach any voicemail CDR legs that are siblings of queue records but
+    # were excluded from the base query (they have no cc_queue_joined_epoch).
+    attach_voicemail_siblings(db, queue_records, queue_entries)
+
+    # Detect queue-to-queue hops for unanswered entries (e.g. site queue -> ALL
+    # billing queue). These are treated as transfer-out missed calls.
+    transfer_keys = compute_queue_hop_transfer_keys(
+        db,
+        start_epoch=start_epoch,
+        end_epoch=end_epoch,
+        queue_entries=queue_entries,
+        direction=direction or "inbound",
+    )
+
     # ======================================================================
     # STEP 3: Calculate metrics per queue extension
     # ======================================================================
@@ -1373,17 +1641,36 @@ async def get_queue_performance_report(
     for extension, entry_map in sorted(queue_entries.items()):
         # Count outcomes using unique queue entries
         offered = len(entry_map)
-        answered = sum(1 for records in entry_map.values()
-                       if is_queue_entry_answered(records, strict_answered=strict_answered))
-        voicemail_calls = sum(1 for records in entry_map.values()
-                              if is_queue_entry_voicemail(records, strict_answered=strict_answered))
-        abandoned = sum(1 for records in entry_map.values()
-                        if is_queue_entry_abandoned(
-                            records,
-                            strict_answered=strict_answered,
-                            exclude_deflects=exclude_deflects,
-                        ))
-        missed_calls = abandoned + voicemail_calls
+
+        entry_is_answered = {}
+        entry_is_voicemail = {}
+        entry_is_transferred = {}
+        for entry_key, records in entry_map.items():
+            is_answered = is_queue_entry_answered(records, strict_answered=strict_answered)
+            is_voicemail = is_queue_entry_voicemail(records, strict_answered=strict_answered)
+            is_transferred = (not is_answered) and (
+                (extension, entry_key[0], entry_key[1]) in transfer_keys
+                or is_queue_entry_transferred_out(records, strict_answered=strict_answered)
+            )
+            entry_is_answered[entry_key] = is_answered
+            entry_is_voicemail[entry_key] = is_voicemail
+            entry_is_transferred[entry_key] = is_transferred
+
+        answered = sum(1 for v in entry_is_answered.values() if v)
+        voicemail_calls = sum(1 for v in entry_is_voicemail.values() if v)
+        missed_calls = sum(1 for v in entry_is_transferred.values() if v)
+        abandoned = sum(
+            1
+            for entry_key in entry_map.keys()
+            if (not entry_is_answered[entry_key])
+            and (not entry_is_voicemail[entry_key])
+            and (not entry_is_transferred[entry_key])
+            and is_queue_entry_abandoned(
+                entry_map[entry_key],
+                strict_answered=strict_answered,
+                exclude_deflects=exclude_deflects,
+            )
+        )
         missed_percent = (missed_calls / offered * 100) if offered > 0 else 0
 
         # ASA and service level use answered queue entries (not raw record rows).
