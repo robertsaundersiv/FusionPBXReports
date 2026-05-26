@@ -1,6 +1,53 @@
 import apiClient from './api';
 import type { ExecutiveOverviewData, DashboardFilters } from '../types';
 
+interface QueueReportPrefetchOptions {
+  timezone?: string;
+}
+
+function getBrowserTimeZone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/Phoenix';
+  } catch {
+    return 'America/Phoenix';
+  }
+}
+
+function startOfLocalDay(date: Date): Date {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+function endOfLocalDay(date: Date): Date {
+  const d = new Date(date);
+  d.setHours(23, 59, 59, 999);
+  return d;
+}
+
+function buildQueueReportPrefetchRanges(now: Date) {
+  const todayStart = startOfLocalDay(now);
+  const todayEnd = endOfLocalDay(now);
+
+  const yesterdayRef = new Date(now);
+  yesterdayRef.setDate(yesterdayRef.getDate() - 1);
+  const yesterdayStart = startOfLocalDay(yesterdayRef);
+  const yesterdayEnd = endOfLocalDay(yesterdayRef);
+
+  const last7Start = new Date(now);
+  last7Start.setDate(last7Start.getDate() - 7);
+
+  const last30Start = new Date(now);
+  last30Start.setDate(last30Start.getDate() - 30);
+
+  return [
+    { start: todayStart, end: todayEnd },
+    { start: yesterdayStart, end: yesterdayEnd },
+    { start: last7Start, end: now },
+    { start: last30Start, end: now },
+  ];
+}
+
 // Helper function to convert frontend filters to backend API params
 function formatFiltersForAPI(filters: DashboardFilters) {
   const params: any = {};
@@ -47,6 +94,31 @@ function formatFiltersForAPI(filters: DashboardFilters) {
 }
 
 export const dashboardService = {
+  prefetchCommonQueueReportViews(options: QueueReportPrefetchOptions = {}) {
+    const timezone = options.timezone || getBrowserTimeZone();
+    const now = new Date();
+    const ranges = buildQueueReportPrefetchRanges(now);
+
+    // Stagger requests to avoid a single burst right after login.
+    ranges.forEach((range, idx) => {
+      window.setTimeout(() => {
+        void apiClient
+          .get('/api/v1/dashboard/queue-performance-report', {
+            params: {
+              start_date: range.start.toISOString(),
+              end_date: range.end.toISOString(),
+              direction: 'inbound',
+              exclude_deflects: true,
+              timezone,
+            },
+          })
+          .catch(() => {
+            // Prefetch is best-effort; ignore failures.
+          });
+      }, idx * 350);
+    });
+  },
+
   async getExecutiveOverview(filters: DashboardFilters): Promise<ExecutiveOverviewData> {
     const params = formatFiltersForAPI(filters);
     console.log('📊 Requesting Executive Overview with params:', params);
