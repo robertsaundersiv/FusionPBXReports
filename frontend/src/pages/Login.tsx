@@ -1,10 +1,7 @@
 import React, { useState } from 'react';
 import apiClient from '../services/api';
-import { dashboardService } from '../services/dashboard';
-import { useNavigate } from 'react-router-dom';
 
 export default function Login() {
-  const navigate = useNavigate();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -23,10 +20,8 @@ export default function Login() {
       const { access_token } = response.data;
       localStorage.setItem('auth_token', access_token);
 
-      // Warm common queue report ranges in the background.
-      dashboardService.prefetchCommonQueueReportViews();
-
-      navigate('/executive-overview', { replace: true });
+      // Force app re-initialization so auth bootstrap picks up the new token.
+      window.location.replace('/executive-overview');
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Login failed. Please try again.');
     } finally {

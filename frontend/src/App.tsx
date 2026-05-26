@@ -3,6 +3,7 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import Layout from './components/Layout';
 import Login from './pages/Login';
 import { authService } from './services/auth';
+import { dashboardService } from './services/dashboard';
 import type { UserAccount } from './types';
 import './index.css';
 
@@ -47,6 +48,14 @@ function App() {
         setAuthLoading(false);
       });
   }, []);
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      return;
+    }
+
+    dashboardService.prefetchCommonQueueReportViews();
+  }, [isAuthenticated]);
 
   if (authLoading) {
     return <div className="p-8 text-center">Loading...</div>;
