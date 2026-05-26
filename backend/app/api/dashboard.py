@@ -30,6 +30,7 @@ EXEC_OVERVIEW_CACHE_TTL = int(os.getenv("EXEC_OVERVIEW_CACHE_TTL", "60"))
 METADATA_CACHE_TTL = int(os.getenv("METADATA_CACHE_TTL", "300"))
 QUEUE_REPORT_CACHE_TTL = int(os.getenv("QUEUE_REPORT_CACHE_TTL", "60"))
 QUEUE_TRANSFER_WINDOW_SECONDS = int(os.getenv("QUEUE_TRANSFER_WINDOW_SECONDS", "600"))
+QUEUE_TRANSFER_HOP_MAX_DAYS = int(os.getenv("QUEUE_TRANSFER_HOP_MAX_DAYS", "14"))
 _redis_client = None
 
 QUEUE_ANALYTICS_COLUMNS = (
@@ -1705,14 +1706,17 @@ async def get_queue_performance_report(
             if (not is_answered) and (not is_voicemail) and (not record_transferred):
                 hop_source_entries.append((extension, caller, joined_epoch))
 
-    transfer_keys = compute_queue_hop_transfer_keys(
-        db,
-        start_epoch=start_epoch,
-        end_epoch=end_epoch,
-        queue_entries=queue_entries,
-        source_entries=hop_source_entries,
-        direction=direction or "inbound",
-    )
+    range_days = max(1.0, (end_epoch - start_epoch) / 86400.0)
+    transfer_keys = set()
+    if range_days <= float(QUEUE_TRANSFER_HOP_MAX_DAYS):
+        transfer_keys = compute_queue_hop_transfer_keys(
+            db,
+            start_epoch=start_epoch,
+            end_epoch=end_epoch,
+            queue_entries=queue_entries,
+            source_entries=hop_source_entries,
+            direction=direction or "inbound",
+        )
 
     # ======================================================================
     # STEP 3: Calculate metrics per queue extension
