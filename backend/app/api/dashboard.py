@@ -28,6 +28,7 @@ WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 EXEC_OVERVIEW_CACHE_TTL = int(os.getenv("EXEC_OVERVIEW_CACHE_TTL", "60"))
 METADATA_CACHE_TTL = int(os.getenv("METADATA_CACHE_TTL", "300"))
+QUEUE_REPORT_CACHE_TTL = int(os.getenv("QUEUE_REPORT_CACHE_TTL", "60"))
 QUEUE_TRANSFER_WINDOW_SECONDS = int(os.getenv("QUEUE_TRANSFER_WINDOW_SECONDS", "600"))
 _redis_client = None
 
@@ -102,6 +103,22 @@ def build_exec_overview_cache_key(
     return (
         f"dashboard:exec:v1:{start_epoch // 60}:{end_epoch // 60}:"
         f"{queue_part}:{direction_part}:{timezone_part}"
+    )
+
+
+def build_queue_report_cache_key(
+    start_epoch: int,
+    end_epoch: int,
+    queue_ids: Optional[List[str]],
+    strict_answered: bool,
+    exclude_deflects: bool,
+    timezone_name: str,
+) -> str:
+    queue_part = "all" if not queue_ids else ",".join(sorted(queue_ids))
+    timezone_part = timezone_name or "America/Phoenix"
+    return (
+        f"dashboard:queue-report:v1:{start_epoch // 60}:{end_epoch // 60}:"
+        f"{queue_part}:{int(strict_answered)}:{int(exclude_deflects)}:{timezone_part}"
     )
 
 
@@ -222,6 +239,7 @@ def compute_queue_hop_transfer_keys(
     start_epoch: int,
     end_epoch: int,
     queue_entries: dict,
+    source_entries: Optional[List[tuple]] = None,
     direction: str = "inbound",
     transfer_window_seconds: int = QUEUE_TRANSFER_WINDOW_SECONDS,
 ) -> Set[tuple]:
@@ -231,15 +249,15 @@ def compute_queue_hop_transfer_keys(
     for entries that have a later queue entry for the same caller in a different
     queue within transfer_window_seconds.
     """
-    source_entries = []
-    caller_numbers = set()
+    if source_entries is None:
+        source_entries = []
+        for extension, entry_map in queue_entries.items():
+            for caller, joined_epoch in entry_map.keys():
+                if not caller or joined_epoch is None:
+                    continue
+                source_entries.append((extension, caller, joined_epoch))
 
-    for extension, entry_map in queue_entries.items():
-        for caller, joined_epoch in entry_map.keys():
-            if not caller or joined_epoch is None:
-                continue
-            source_entries.append((extension, caller, joined_epoch))
-            caller_numbers.add(caller)
+    caller_numbers = {caller for _, caller, _ in source_entries if caller}
 
     if not source_entries or not caller_numbers:
         return set()
@@ -1562,6 +1580,18 @@ async def get_queue_performance_report(
     start_epoch = int(start_date.timestamp())
     # Set end_epoch to end of day (23:59:59) to include full last day
     end_epoch = int((end_date.replace(hour=23, minute=59, second=59)).timestamp())
+
+    cache_key = build_queue_report_cache_key(
+        start_epoch=start_epoch,
+        end_epoch=end_epoch,
+        queue_ids=queue_ids,
+        strict_answered=strict_answered,
+        exclude_deflects=exclude_deflects,
+        timezone_name=timezone,
+    )
+    cached_response = cache_get_json(cache_key)
+    if cached_response is not None:
+        return cached_response
     
     # Convert queue UUIDs to cc_queue identifiers (extension@context format)
     queue_extensions = None
@@ -1623,13 +1653,28 @@ async def get_queue_performance_report(
     # were excluded from the base query (they have no cc_queue_joined_epoch).
     attach_voicemail_siblings(db, queue_records, queue_entries)
 
-    # Detect queue-to-queue hops for unanswered entries (e.g. site queue -> ALL
-    # billing queue). These are treated as transfer-out missed calls.
+    # Detect queue-to-queue hops only for unresolved entries to reduce query/load
+    # on larger windows (e.g. 30-day report).
+    hop_source_entries = []
+    for extension, entry_map in queue_entries.items():
+        for entry_key, records in entry_map.items():
+            caller, joined_epoch = entry_key
+            if not caller or joined_epoch is None:
+                continue
+            if is_queue_entry_answered(records, strict_answered=strict_answered):
+                continue
+            if is_queue_entry_voicemail(records, strict_answered=strict_answered):
+                continue
+            if is_queue_entry_transferred_out(records, strict_answered=strict_answered):
+                continue
+            hop_source_entries.append((extension, caller, joined_epoch))
+
     transfer_keys = compute_queue_hop_transfer_keys(
         db,
         start_epoch=start_epoch,
         end_epoch=end_epoch,
         queue_entries=queue_entries,
+        source_entries=hop_source_entries,
         direction=direction or "inbound",
     )
 
@@ -1724,11 +1769,14 @@ async def get_queue_performance_report(
     # Sort by offered descending (default sort)
     results.sort(key=lambda x: x['offered'], reverse=True)
     
-    return {
+    response_payload = {
         'start': start_date.isoformat(),
         'end': end_date.isoformat(),
         'rows': results,
     }
+
+    cache_set_json(cache_key, response_payload, QUEUE_REPORT_CACHE_TTL)
+    return response_payload
 
 
 @router.get("/repeat-callers", response_model=RepeatCallersResponse)
