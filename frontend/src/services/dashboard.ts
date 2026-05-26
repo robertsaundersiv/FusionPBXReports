@@ -1,5 +1,6 @@
 import apiClient from './api';
 import type { ExecutiveOverviewData, DashboardFilters } from '../types';
+import { dateUtils } from '../utils/formatters';
 
 interface QueueReportPrefetchOptions {
   timezone?: string;
@@ -13,39 +14,15 @@ function getBrowserTimeZone(): string {
   }
 }
 
-function startOfLocalDay(date: Date): Date {
-  const d = new Date(date);
-  d.setHours(0, 0, 0, 0);
-  return d;
-}
-
-function endOfLocalDay(date: Date): Date {
-  const d = new Date(date);
-  d.setHours(23, 59, 59, 999);
-  return d;
-}
-
-function buildQueueReportPrefetchRanges(now: Date) {
-  const todayStart = startOfLocalDay(now);
-  const todayEnd = endOfLocalDay(now);
-
-  const yesterdayRef = new Date(now);
-  yesterdayRef.setDate(yesterdayRef.getDate() - 1);
-  const yesterdayStart = startOfLocalDay(yesterdayRef);
-  const yesterdayEnd = endOfLocalDay(yesterdayRef);
-
-  const last7Start = new Date(now);
-  last7Start.setDate(last7Start.getDate() - 7);
-
-  const last30Start = new Date(now);
-  last30Start.setDate(last30Start.getDate() - 30);
-
-  return [
-    { start: todayStart, end: todayEnd },
-    { start: yesterdayStart, end: yesterdayEnd },
-    { start: last7Start, end: now },
-    { start: last30Start, end: now },
-  ];
+function buildQueueReportPrefetchRanges() {
+  // Match DashboardFilterBar presets exactly so prefetch hits the same cache keys.
+  return ['today', 'yesterday', 'last_7', 'last_30'].map((preset) => {
+    const range = dateUtils.getDateRangeByPreset(preset);
+    return {
+      start: range.startDate,
+      end: range.endDate,
+    };
+  });
 }
 
 // Helper function to convert frontend filters to backend API params
@@ -96,8 +73,7 @@ function formatFiltersForAPI(filters: DashboardFilters) {
 export const dashboardService = {
   prefetchCommonQueueReportViews(options: QueueReportPrefetchOptions = {}) {
     const timezone = options.timezone || getBrowserTimeZone();
-    const now = new Date();
-    const ranges = buildQueueReportPrefetchRanges(now);
+    const ranges = buildQueueReportPrefetchRanges();
 
     // Stagger requests to avoid a single burst right after login.
     ranges.forEach((range, idx) => {
