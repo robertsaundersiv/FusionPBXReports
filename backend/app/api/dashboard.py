@@ -1593,6 +1593,7 @@ async def get_queue_performance_report(
     if direction:
         base_query = base_query.filter(CDRRecord.direction == direction)
 
+    base_query = optimize_queue_records_query(base_query)
     queue_records = base_query.all()
 
     # ======================================================================
