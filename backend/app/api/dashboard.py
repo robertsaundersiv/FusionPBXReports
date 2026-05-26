@@ -487,6 +487,25 @@ def get_queue_entry_aht_seconds(records, strict_answered: bool = False) -> Optio
     return float(max(durations))
 
 
+def has_queue_entry_abandon_signal(records, exclude_deflects: bool = True) -> bool:
+    """Return True when any record shows an abandonment signal."""
+    for record in records:
+        if (record.billsec or 0) != 0:
+            continue
+        if exclude_deflects and (getattr(record, "last_app", None) or "") == "deflect":
+            continue
+        if (record.hangup_cause or "") == "BLIND_TRANSFER":
+            continue
+        if (
+            (record.hangup_cause in ("ORIGINATOR_CANCEL", "NO_ANSWER", "USER_BUSY"))
+            or ((getattr(record, "cc_cause", None) or "") == "TIMEOUT")
+            or ((getattr(record, "call_disposition", None) or "") == "missed")
+        ):
+            return True
+
+    return False
+
+
 def get_accessible_agent_identifiers(db: Session, current_user: dict) -> Optional[Set[str]]:
     """Return allowed agent identifiers for the current user.
 
@@ -1656,6 +1675,14 @@ async def get_queue_performance_report(
     # were excluded from the base query (they have no cc_queue_joined_epoch).
     attach_voicemail_siblings(db, queue_records, queue_entries)
 
+    # Pre-compute entry-level outcomes once to avoid repeated scans over the same
+    # records in later metric calculations.
+    entry_is_answered = {}
+    entry_is_voicemail = {}
+    entry_record_transferred = {}
+    entry_asa = {}
+    entry_aht = {}
+
     # Detect queue-to-queue hops only for unresolved entries to reduce query/load
     # on larger windows (e.g. 30-day report).
     hop_source_entries = []
@@ -1664,13 +1691,19 @@ async def get_queue_performance_report(
             caller, joined_epoch = entry_key
             if not caller or joined_epoch is None:
                 continue
-            if is_queue_entry_answered(records, strict_answered=strict_answered):
-                continue
-            if is_queue_entry_voicemail(records, strict_answered=strict_answered):
-                continue
-            if is_queue_entry_transferred_out(records, strict_answered=strict_answered):
-                continue
-            hop_source_entries.append((extension, caller, joined_epoch))
+
+            is_answered = is_queue_entry_answered(records, strict_answered=strict_answered)
+            is_voicemail = is_queue_entry_voicemail(records, strict_answered=strict_answered)
+            record_transferred = is_queue_entry_transferred_out(records, strict_answered=strict_answered)
+
+            entry_is_answered[(extension, entry_key)] = is_answered
+            entry_is_voicemail[(extension, entry_key)] = is_voicemail
+            entry_record_transferred[(extension, entry_key)] = record_transferred
+            entry_asa[(extension, entry_key)] = get_queue_entry_asa_seconds(records, strict_answered=strict_answered)
+            entry_aht[(extension, entry_key)] = get_queue_entry_aht_seconds(records, strict_answered=strict_answered)
+
+            if (not is_answered) and (not is_voicemail) and (not record_transferred):
+                hop_source_entries.append((extension, caller, joined_epoch))
 
     transfer_keys = compute_queue_hop_transfer_keys(
         db,
@@ -1691,43 +1724,43 @@ async def get_queue_performance_report(
         # Count outcomes using unique queue entries
         offered = len(entry_map)
 
-        entry_is_answered = {}
-        entry_is_voicemail = {}
         entry_is_transferred = {}
+        entry_is_abandoned = {}
         for entry_key, records in entry_map.items():
-            is_answered = is_queue_entry_answered(records, strict_answered=strict_answered)
-            is_voicemail = is_queue_entry_voicemail(records, strict_answered=strict_answered)
+            pre_key = (extension, entry_key)
+            is_answered = entry_is_answered.get(pre_key, False)
+            is_voicemail = entry_is_voicemail.get(pre_key, False)
             is_transferred = (not is_answered) and (
                 (extension, entry_key[0], entry_key[1]) in transfer_keys
-                or is_queue_entry_transferred_out(records, strict_answered=strict_answered)
+                or entry_record_transferred.get(pre_key, False)
             )
-            entry_is_answered[entry_key] = is_answered
-            entry_is_voicemail[entry_key] = is_voicemail
             entry_is_transferred[entry_key] = is_transferred
+            entry_is_abandoned[entry_key] = (
+                (not is_answered)
+                and (not is_voicemail)
+                and (not is_transferred)
+                and has_queue_entry_abandon_signal(records, exclude_deflects=exclude_deflects)
+            )
 
-        answered = sum(1 for v in entry_is_answered.values() if v)
-        voicemail_calls = sum(1 for v in entry_is_voicemail.values() if v)
-        missed_calls = sum(1 for v in entry_is_transferred.values() if v)
-        abandoned = sum(
+        answered = sum(
             1
             for entry_key in entry_map.keys()
-            if (not entry_is_answered[entry_key])
-            and (not entry_is_voicemail[entry_key])
-            and (not entry_is_transferred[entry_key])
-            and is_queue_entry_abandoned(
-                entry_map[entry_key],
-                strict_answered=strict_answered,
-                exclude_deflects=exclude_deflects,
-            )
+            if entry_is_answered.get((extension, entry_key), False)
         )
+        voicemail_calls = sum(
+            1
+            for entry_key in entry_map.keys()
+            if entry_is_voicemail.get((extension, entry_key), False)
+        )
+        missed_calls = sum(1 for v in entry_is_transferred.values() if v)
+        abandoned = sum(1 for v in entry_is_abandoned.values() if v)
         missed_percent = (missed_calls / offered * 100) if offered > 0 else 0
 
         # ASA and service level use answered queue entries (not raw record rows).
         asa_times = [
-            asa for asa in (
-                get_queue_entry_asa_seconds(records, strict_answered=strict_answered)
-                for records in entry_map.values()
-            )
+            asa
+            for entry_key in entry_map.keys()
+            for asa in [entry_asa.get((extension, entry_key))]
             if asa is not None
         ]
         service_level_count = sum(1 for t in asa_times if t <= 30)
@@ -1736,10 +1769,9 @@ async def get_queue_performance_report(
 
         # AHT uses answered queue entries (not raw record rows).
         aht_times = [
-            aht for aht in (
-                get_queue_entry_aht_seconds(records, strict_answered=strict_answered)
-                for records in entry_map.values()
-            )
+            aht
+            for entry_key in entry_map.keys()
+            for aht in [entry_aht.get((extension, entry_key))]
             if aht is not None
         ]
         aht_sec = sum(aht_times) / len(aht_times) if aht_times else 0
