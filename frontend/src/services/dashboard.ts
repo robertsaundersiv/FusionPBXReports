@@ -42,6 +42,7 @@ function prefetchExecutiveOverviewRange(range: PrefetchRange, timezone: string):
       params: {
         start_date: range.start.toISOString(),
         end_date: range.end.toISOString(),
+        direction: 'inbound',
         timezone,
       },
     })
