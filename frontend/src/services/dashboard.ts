@@ -6,6 +6,11 @@ interface QueueReportPrefetchOptions {
   timezone?: string;
 }
 
+interface PrefetchRange {
+  start: Date;
+  end: Date;
+}
+
 function getBrowserTimeZone(): string {
   try {
     return Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/Phoenix';
@@ -23,6 +28,54 @@ function buildQueueReportPrefetchRanges() {
       end: range.endDate,
     };
   });
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
+function prefetchExecutiveOverviewRange(range: PrefetchRange, timezone: string): Promise<void> {
+  return apiClient
+    .get('/api/v1/dashboard/executive-overview', {
+      params: {
+        start_date: range.start.toISOString(),
+        end_date: range.end.toISOString(),
+        timezone,
+      },
+    })
+    .then(() => undefined)
+    .catch(() => undefined);
+}
+
+function prefetchQueueReportRange(range: PrefetchRange, timezone: string): Promise<void> {
+  return apiClient
+    .get('/api/v1/dashboard/queue-performance-report', {
+      params: {
+        start_date: range.start.toISOString(),
+        end_date: range.end.toISOString(),
+        direction: 'inbound',
+        exclude_deflects: true,
+        timezone,
+      },
+    })
+    .then(() => undefined)
+    .catch(() => undefined);
+}
+
+function prefetchAgentReportRange(range: PrefetchRange): Promise<void> {
+  return apiClient
+    .get('/api/v1/agent-performance/report', {
+      params: {
+        start: range.start.toISOString(),
+        end: range.end.toISOString(),
+        include_outbound: false,
+        exclude_deflects: true,
+      },
+    })
+    .then(() => undefined)
+    .catch(() => undefined);
 }
 
 // Helper function to convert frontend filters to backend API params
@@ -93,6 +146,27 @@ export const dashboardService = {
           });
       }, idx * 350);
     });
+  },
+
+  prefetchPostLoginViews(options: QueueReportPrefetchOptions = {}) {
+    const timezone = options.timezone || getBrowserTimeZone();
+    const ranges = buildQueueReportPrefetchRanges();
+    const executiveRange = ranges[2]; // "today"
+
+    void (async () => {
+      // Requested order: Executive -> Queue Performance Report -> Agent Performance Report.
+      await prefetchExecutiveOverviewRange(executiveRange, timezone);
+
+      for (const range of ranges) {
+        await prefetchQueueReportRange(range, timezone);
+        await sleep(150);
+      }
+
+      for (const range of ranges) {
+        await prefetchAgentReportRange(range);
+        await sleep(150);
+      }
+    })();
   },
 
   async getExecutiveOverview(filters: DashboardFilters): Promise<ExecutiveOverviewData> {

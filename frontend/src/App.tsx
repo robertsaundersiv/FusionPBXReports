@@ -54,7 +54,7 @@ function App() {
       return;
     }
 
-    dashboardService.prefetchCommonQueueReportViews();
+    dashboardService.prefetchPostLoginViews();
   }, [isAuthenticated]);
 
   if (authLoading) {
