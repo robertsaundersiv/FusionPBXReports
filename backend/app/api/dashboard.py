@@ -606,10 +606,17 @@ async def get_wallboard_live(
     client = FusionPBXClient()
     queue_rows: List[Dict[str, Any]] = []
     agent_rows: List[Dict[str, Any]] = []
+    wallboard_snapshot: Optional[Dict[str, Any]] = None
 
     try:
         await client.initialize()
-        live_queues, live_agents = await asyncio.gather(client.get_queues(), client.get_agents())
+        wallboard_snapshot = await client.get_wallboard_live_snapshot()
+        if wallboard_snapshot:
+            queue_rows = wallboard_snapshot.get("queues", []) or []
+            agent_rows = wallboard_snapshot.get("agents", []) or []
+            live_queues, live_agents = [], []
+        else:
+            live_queues, live_agents = await asyncio.gather(client.get_queues(), client.get_agents())
     except Exception as exc:
         logger.warning("Wallboard live fetch failed; using empty snapshot: %s", exc)
         live_queues, live_agents = [], []
@@ -630,6 +637,37 @@ async def get_wallboard_live(
     now_utc = ensure_utc_datetime(now_local)
     day_start_epoch = int(day_start_utc.timestamp())
     now_epoch = int(now_utc.timestamp())
+
+    if wallboard_snapshot:
+        queue_rows.sort(key=lambda item: (str(item.get("queue_name") or "").lower(), str(item.get("queue_extension") or "")))
+        agent_rows.sort(key=lambda item: str(item.get("agent_name") or "").lower())
+
+        queue_answered_total = sum(_to_int(item.get("answered"), 0) for item in queue_rows)
+        queue_trying_total = sum(_to_int(item.get("trying"), 0) for item in queue_rows)
+        queue_abandoned_total = sum(_to_int(item.get("abandoned"), 0) for item in queue_rows)
+        total_talk_seconds = sum(_to_int(item.get("talk_time_seconds"), 0) for item in queue_rows)
+        total_wait_seconds = sum(_to_int(item.get("wait_time_seconds"), 0) for item in queue_rows)
+
+        response_payload = {
+            "timezone": timezone,
+            "timestamp": datetime.now(user_timezone).isoformat(),
+            "queues": queue_rows,
+            "agents": agent_rows,
+            "summary": {
+                "queue_count": len(queue_rows),
+                "agent_count": len(agent_rows),
+                "answered": queue_answered_total,
+                "trying": queue_trying_total,
+                "abandoned": queue_abandoned_total,
+                "total_talk_time_seconds": total_talk_seconds,
+                "total_wait_time_seconds": total_wait_seconds,
+                "average_talk_time_seconds": int(total_talk_seconds / queue_answered_total) if queue_answered_total > 0 else 0,
+                "average_wait_time_seconds": int(total_wait_seconds / queue_answered_total) if queue_answered_total > 0 else 0,
+            },
+        }
+
+        cache_set_json(cache_key, response_payload, 10)
+        return response_payload
 
     live_records_query = (
         db.query(CDRRecord)
@@ -797,7 +835,7 @@ async def get_wallboard_live(
             state = "Answered"
         elif activity.get("has_trying_call"):
             state = "Trying"
-        elif seconds_since_last_event is not None and seconds_since_last_event <= 300 and answered_count > 0:
+        elif seconds_since_last_event is not None and seconds_since_last_event <= 900 and answered_count > 0:
             # Fusion API does not expose live state via this integration token, so
             # we treat very recent handled activity as active/answered.
             state = "Answered"
