@@ -230,7 +230,7 @@ class FusionPBXClient:
         agent_items: List[Dict[str, Any]] = []
 
         card_blocks = re.findall(
-            r'<div class="col-md-12 hud_box"[^>]*>(.*?)</div>\s*</div>\s*</div>',
+            r"<div[^>]*class=['\"][^'\"]*\bcol-md-12\b[^'\"]*\bhud_box\b[^'\"]*['\"][^>]*>(.*?)</div>\s*</div>\s*</div>",
             html_text,
             flags=re.IGNORECASE | re.DOTALL,
         )
@@ -286,7 +286,11 @@ class FusionPBXClient:
         return {"queues": queue_items, "agents": agent_items, "source": "fusion_wallboard_html"}
 
     def _extract_span_text(self, block: str, class_name: str) -> str:
-        match = re.search(rf'<span class="{re.escape(class_name)}"[^>]*>(.*?)</span>', block, flags=re.IGNORECASE | re.DOTALL)
+        match = re.search(
+            rf"<span[^>]*class=['\"][^'\"]*\b{re.escape(class_name)}\b[^'\"]*['\"][^>]*>(.*?)</span>",
+            block,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
         if not match:
             return ""
         value = match.group(1)
