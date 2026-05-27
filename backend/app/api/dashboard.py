@@ -623,6 +623,71 @@ async def get_wallboard_live(
         for queue in db.query(Queue).all()
     }
 
+    now_local = datetime.now(user_timezone)
+    day_start_local = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+    day_start_utc = ensure_utc_datetime(day_start_local)
+    now_utc = ensure_utc_datetime(now_local)
+    day_start_epoch = int(day_start_utc.timestamp())
+    now_epoch = int(now_utc.timestamp())
+
+    live_records_query = (
+        db.query(CDRRecord)
+        .filter(
+            CDRRecord.start_epoch >= day_start_epoch,
+            CDRRecord.start_epoch <= now_epoch,
+            CDRRecord.cc_queue_joined_epoch.isnot(None),
+            CDRRecord.direction == "inbound",
+        )
+    )
+    live_records_query = optimize_queue_records_query(live_records_query)
+    live_records = live_records_query.all()
+
+    queue_entry_map: Dict[str, Dict[tuple, List[CDRRecord]]] = {}
+    for record in live_records:
+        cc_queue = getattr(record, "cc_queue", None) or ""
+        queue_extension = cc_queue.split("@", 1)[0].strip() if cc_queue else ""
+        if not queue_extension:
+            continue
+        entry_key = (getattr(record, "caller_id_number", None), getattr(record, "cc_queue_joined_epoch", None))
+        if queue_extension not in queue_entry_map:
+            queue_entry_map[queue_extension] = {}
+        if entry_key not in queue_entry_map[queue_extension]:
+            queue_entry_map[queue_extension][entry_key] = []
+        queue_entry_map[queue_extension][entry_key].append(record)
+
+    queue_live_metrics: Dict[str, Dict[str, int]] = {}
+    for queue_extension, entry_map in queue_entry_map.items():
+        answered = 0
+        abandoned = 0
+        trying = 0
+        talk_total = 0
+        wait_total = 0
+
+        for records in entry_map.values():
+            is_answered = is_queue_entry_answered(records)
+            is_abandoned = is_queue_entry_abandoned(records)
+
+            if is_answered:
+                answered += 1
+                aht = get_queue_entry_aht_seconds(records)
+                asa = get_queue_entry_asa_seconds(records)
+                if aht is not None:
+                    talk_total += int(aht)
+                if asa is not None:
+                    wait_total += int(asa)
+            elif is_abandoned:
+                abandoned += 1
+            else:
+                trying += 1
+
+        queue_live_metrics[queue_extension] = {
+            "answered": answered,
+            "abandoned": abandoned,
+            "trying": trying,
+            "talk_time_seconds": talk_total,
+            "wait_time_seconds": wait_total,
+        }
+
     for queue in live_queues:
         queue_extension = str(_first_present_value(queue, ["queue_extension", "extension"], "") or "")
         queue_name = _first_present_value(
@@ -631,33 +696,18 @@ async def get_wallboard_live(
             queue_name_by_extension.get(queue_extension) or queue_extension or "Unknown Queue",
         )
 
+        metrics = queue_live_metrics.get(queue_extension, {})
+
         queue_rows.append(
             {
                 "queue_id": _first_present_value(queue, ["queue_uuid", "call_center_queue_uuid", "queue_id"], queue_extension or queue_name),
                 "queue_extension": queue_extension,
                 "queue_name": queue_name,
-                "trying": _to_int(
-                    _first_present_value(
-                        queue,
-                        [
-                            "trying",
-                            "queue_trying_count",
-                            "calls_trying",
-                            "call_count",
-                            "waiting",
-                            "queue_waiting_count",
-                        ],
-                        0,
-                    )
-                ),
-                "answered": _to_int(_first_present_value(queue, ["answered", "queue_answered_count", "calls_answered"], 0)),
-                "abandoned": _to_int(_first_present_value(queue, ["abandoned", "queue_abandoned_count", "calls_abandoned"], 0)),
-                "talk_time_seconds": _to_int(
-                    _first_present_value(queue, ["talk_time_seconds", "queue_talk_time", "total_talk_time_seconds"], 0)
-                ),
-                "wait_time_seconds": _to_int(
-                    _first_present_value(queue, ["wait_time_seconds", "queue_wait_time", "total_wait_time_seconds"], 0)
-                ),
+                "trying": _to_int(metrics.get("trying"), 0),
+                "answered": _to_int(metrics.get("answered"), 0),
+                "abandoned": _to_int(metrics.get("abandoned"), 0),
+                "talk_time_seconds": _to_int(metrics.get("talk_time_seconds"), 0),
+                "wait_time_seconds": _to_int(metrics.get("wait_time_seconds"), 0),
             }
         )
 
