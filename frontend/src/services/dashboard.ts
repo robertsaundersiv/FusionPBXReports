@@ -1,5 +1,5 @@
 import apiClient from './api';
-import type { ExecutiveOverviewData, DashboardFilters } from '../types';
+import type { ExecutiveOverviewData, DashboardFilters, WallboardLiveResponse } from '../types';
 import { dateUtils } from '../utils/formatters';
 
 interface QueueReportPrefetchOptions {
@@ -203,6 +203,15 @@ export const dashboardService = {
     
     const response = await apiClient.get('/api/v1/dashboard/queue-performance', {
       params,
+    });
+    return response.data;
+  },
+
+  async getWallboardLive(timezone?: string): Promise<WallboardLiveResponse> {
+    const response = await apiClient.get('/api/v1/dashboard/wallboard-live', {
+      params: {
+        timezone: timezone || getBrowserTimeZone(),
+      },
     });
     return response.data;
   },

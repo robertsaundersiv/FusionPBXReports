@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import asyncio
 import redis
 from fastapi import APIRouter, Depends, Query, HTTPException
 from fastapi.encoders import jsonable_encoder
@@ -13,10 +14,11 @@ from sqlalchemy import func, Integer, case, desc, or_, cast, String
 from app.database import get_db
 from app.models import CDRRecord, Queue, Agent, DailyAggregate, HourlyAggregate, User, Extension
 from app.auth import get_current_user
+from app.clients.fusionpbx import FusionPBXClient
 from app.schemas import ExecutiveOverviewResponse, QueuePerformanceResponse, AgentPerformanceResponse, RepeatCallersResponse
 from app.kpi_definitions import KPIDefinitions
 from datetime import datetime, timedelta, timezone as dt_timezone
-from typing import List, Optional, Set
+from typing import List, Optional, Set, Any, Dict
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 router = APIRouter(prefix="/api/v1/dashboard", tags=["dashboard"])
@@ -515,6 +517,44 @@ def get_accessible_agent_identifiers(db: Session, current_user: dict) -> Optiona
     return None
 
 
+def _first_present_value(source: Dict[str, Any], keys: List[str], default: Any = None) -> Any:
+    for key in keys:
+        if key in source and source.get(key) not in (None, ""):
+            return source.get(key)
+    return default
+
+
+def _to_int(value: Any, default: int = 0) -> int:
+    try:
+        if value in (None, ""):
+            return default
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _to_seconds_since_epoch(value: Any) -> Optional[int]:
+    epoch = _to_int(value, default=-1)
+    if epoch <= 0:
+        return None
+    return max(0, int(datetime.now(dt_timezone.utc).timestamp()) - epoch)
+
+
+def _normalize_agent_state(raw_state: Any) -> str:
+    state = str(raw_state or "").strip().lower()
+    if state in {"receiving", "ringing", "trying", "offering"}:
+        return "Trying"
+    if state in {"in a queue call", "inbound", "answered", "on call", "active"}:
+        return "Answered"
+    if state in {"waiting", "idle", "available", "ready"}:
+        return "Waiting"
+    if state in {"break", "away", "paused"}:
+        return "Break"
+    if state:
+        return state.title()
+    return "Unknown"
+
+
 @router.get("/queues-visible")
 async def get_visible_queues(
     current_user: dict = Depends(get_current_user),
@@ -546,6 +586,126 @@ async def get_visible_agents(
     agents = db.query(Agent).order_by(Agent.agent_name).all()
     response_payload = jsonable_encoder(agents)
     cache_set_json(cache_key, response_payload, METADATA_CACHE_TTL)
+    return response_payload
+
+
+@router.get("/wallboard-live")
+async def get_wallboard_live(
+    timezone: str = Query("America/Phoenix"),
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Return a Fusion-style live wallboard snapshot."""
+    cache_key = f"dashboard:wallboard-live:v1:{timezone}"
+    cached_response = cache_get_json(cache_key)
+    if cached_response is not None:
+        return cached_response
+
+    user_timezone = get_requested_timezone(timezone)
+    client = FusionPBXClient()
+    queue_rows: List[Dict[str, Any]] = []
+    agent_rows: List[Dict[str, Any]] = []
+
+    try:
+        await client.initialize()
+        live_queues, live_agents = await asyncio.gather(client.get_queues(), client.get_agents())
+    except Exception as exc:
+        logger.warning("Wallboard live fetch failed; using empty snapshot: %s", exc)
+        live_queues, live_agents = [], []
+    finally:
+        try:
+            await client.close()
+        except Exception:
+            pass
+
+    queue_name_by_extension = {
+        str(getattr(queue, "queue_extension", "") or ""): getattr(queue, "name", None) or getattr(queue, "queue_name", None)
+        for queue in db.query(Queue).all()
+    }
+
+    for queue in live_queues:
+        queue_extension = str(_first_present_value(queue, ["queue_extension", "extension"], "") or "")
+        queue_name = _first_present_value(
+            queue,
+            ["queue_name", "name", "queue_description"],
+            queue_name_by_extension.get(queue_extension) or queue_extension or "Unknown Queue",
+        )
+
+        queue_rows.append(
+            {
+                "queue_id": _first_present_value(queue, ["queue_uuid", "call_center_queue_uuid", "queue_id"], queue_extension or queue_name),
+                "queue_extension": queue_extension,
+                "queue_name": queue_name,
+                "trying": _to_int(
+                    _first_present_value(
+                        queue,
+                        [
+                            "trying",
+                            "queue_trying_count",
+                            "calls_trying",
+                            "call_count",
+                            "waiting",
+                            "queue_waiting_count",
+                        ],
+                        0,
+                    )
+                ),
+                "answered": _to_int(_first_present_value(queue, ["answered", "queue_answered_count", "calls_answered"], 0)),
+                "abandoned": _to_int(_first_present_value(queue, ["abandoned", "queue_abandoned_count", "calls_abandoned"], 0)),
+                "talk_time_seconds": _to_int(
+                    _first_present_value(queue, ["talk_time_seconds", "queue_talk_time", "total_talk_time_seconds"], 0)
+                ),
+                "wait_time_seconds": _to_int(
+                    _first_present_value(queue, ["wait_time_seconds", "queue_wait_time", "total_wait_time_seconds"], 0)
+                ),
+            }
+        )
+
+    for agent in live_agents:
+        agent_rows.append(
+            {
+                "agent_id": _first_present_value(agent, ["agent_uuid", "call_center_agent_uuid", "agent_id"], ""),
+                "agent_name": _first_present_value(agent, ["agent_name", "name"], "Unknown Agent"),
+                "state": _normalize_agent_state(
+                    _first_present_value(agent, ["status", "agent_status", "state", "agent_state"], "Unknown")
+                ),
+                "answered": _to_int(
+                    _first_present_value(agent, ["answered", "calls_answered", "answer_count", "no_answer_count"], 0)
+                ),
+                "last_change_seconds": _to_seconds_since_epoch(
+                    _first_present_value(agent, ["status_epoch", "state_epoch", "last_status_change_epoch"], None)
+                ),
+            }
+        )
+
+    queue_rows.sort(key=lambda item: (str(item.get("queue_name") or "").lower(), str(item.get("queue_extension") or "")))
+    agent_rows.sort(key=lambda item: str(item.get("agent_name") or "").lower())
+
+    queue_answered_total = sum(item["answered"] for item in queue_rows)
+    queue_trying_total = sum(item["trying"] for item in queue_rows)
+    queue_abandoned_total = sum(item["abandoned"] for item in queue_rows)
+    total_talk_seconds = sum(item.get("talk_time_seconds", 0) for item in queue_rows)
+    total_wait_seconds = sum(item.get("wait_time_seconds", 0) for item in queue_rows)
+
+    response_payload = {
+        "timezone": timezone,
+        "timestamp": datetime.now(user_timezone).isoformat(),
+        "queues": queue_rows,
+        "agents": agent_rows,
+        "summary": {
+            "queue_count": len(queue_rows),
+            "agent_count": len(agent_rows),
+            "answered": queue_answered_total,
+            "trying": queue_trying_total,
+            "abandoned": queue_abandoned_total,
+            "total_talk_time_seconds": total_talk_seconds,
+            "total_wait_time_seconds": total_wait_seconds,
+            "average_talk_time_seconds": int(total_talk_seconds / queue_answered_total) if queue_answered_total > 0 else 0,
+            "average_wait_time_seconds": int(total_wait_seconds / queue_answered_total) if queue_answered_total > 0 else 0,
+        },
+    }
+
+    cache_set_json(cache_key, response_payload, 10)
     return response_payload
 
 

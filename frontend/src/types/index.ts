@@ -258,6 +258,45 @@ export interface QueuePerformanceHourlyResponse {
   queues: QueuePerformanceHourlyData[];
 }
 
+export interface WallboardLiveQueue {
+  queue_id: string;
+  queue_extension?: string;
+  queue_name: string;
+  trying: number;
+  answered: number;
+  abandoned: number;
+  talk_time_seconds?: number;
+  wait_time_seconds?: number;
+}
+
+export interface WallboardLiveAgent {
+  agent_id: string;
+  agent_name: string;
+  state: string;
+  answered: number;
+  last_change_seconds?: number | null;
+}
+
+export interface WallboardLiveSummary {
+  queue_count: number;
+  agent_count: number;
+  answered: number;
+  trying: number;
+  abandoned: number;
+  total_talk_time_seconds: number;
+  total_wait_time_seconds: number;
+  average_talk_time_seconds: number;
+  average_wait_time_seconds: number;
+}
+
+export interface WallboardLiveResponse {
+  timezone: string;
+  timestamp: string;
+  queues: WallboardLiveQueue[];
+  agents: WallboardLiveAgent[];
+  summary: WallboardLiveSummary;
+}
+
 // Grouped queue structure for display
 export interface GroupedQueue {
   groupKey: string;
