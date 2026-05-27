@@ -790,15 +790,21 @@ async def get_wallboard_live(
                 continue
 
         activity = agent_activity.get(agent_id, {})
+        last_event_epoch = activity.get("last_event_epoch")
+        seconds_since_last_event = (now_epoch - int(last_event_epoch)) if last_event_epoch else None
+
         if activity.get("has_active_call"):
             state = "Answered"
         elif activity.get("has_trying_call"):
             state = "Trying"
+        elif seconds_since_last_event is not None and seconds_since_last_event <= 300 and answered_count > 0:
+            # Fusion API does not expose live state via this integration token, so
+            # we treat very recent handled activity as active/answered.
+            state = "Answered"
         else:
             state = "Waiting"
 
-        last_event_epoch = activity.get("last_event_epoch")
-        last_change_seconds = (now_epoch - int(last_event_epoch)) if last_event_epoch else None
+        last_change_seconds = seconds_since_last_event
 
         agent_stats[agent_id] = {
             "state": state,
