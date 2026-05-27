@@ -35,6 +35,7 @@ class FusionPBXClient:
         self.wallboard_username = os.getenv("FUSIONPBX_WALLBOARD_USERNAME", "").strip()
         self.wallboard_password = os.getenv("FUSIONPBX_WALLBOARD_PASSWORD", "").strip()
         self.wallboard_cookie = os.getenv("FUSIONPBX_WALLBOARD_COOKIE", "").strip()
+        self.wallboard_host = os.getenv("FUSIONPBX_WALLBOARD_HOST", "").strip().rstrip('/')
         self.wallboard_resource_path = os.getenv(
             "FUSIONPBX_WALLBOARD_RESOURCE_PATH",
             "/app/call_center_wallboard/resources/call_center_wallboard.php?queue_name=",
@@ -110,7 +111,8 @@ class FusionPBXClient:
             logger.info("Fusion wallboard web credentials are not configured; skipping session login fallback")
             return None
 
-        login_url = f"{self.host}/"
+        login_base = self.wallboard_host or self.host
+        login_url = f"{login_base}/"
         headers = {
             "Accept": "text/html,application/json,*/*",
             "User-Agent": "FusionPBXReports/1.0",
@@ -180,7 +182,8 @@ class FusionPBXClient:
             return path
         if not path.startswith("/"):
             path = f"/{path}"
-        return f"{self.host}{path}"
+        base = self.wallboard_host or self.host
+        return f"{base}{path}"
 
     def _build_wallboard_cookie_header(self) -> Optional[str]:
         raw_cookie = (self.wallboard_cookie or "").strip()

@@ -61,6 +61,7 @@ Optional vars for true Fusion wallboard parity:
 - `FUSIONPBX_WALLBOARD_USERNAME`
 - `FUSIONPBX_WALLBOARD_PASSWORD`
 - `FUSIONPBX_WALLBOARD_COOKIE` (optional pre-authenticated Fusion session cookie, e.g. `PHPSESSID=...`)
+- `FUSIONPBX_WALLBOARD_HOST` (optional Fusion web host override for wallboard scraping, e.g. `https://fusionpbx.wi-fiber.io`)
 - `FUSIONPBX_WALLBOARD_RESOURCE_PATH` (defaults to `/app/call_center_wallboard/resources/call_center_wallboard.php?queue_name=`)
 
 ## Testing and Validation
