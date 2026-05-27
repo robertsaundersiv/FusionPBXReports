@@ -16,7 +16,7 @@ function getBrowserTimeZone(): string {
 
 function buildQueueReportPrefetchRanges() {
   // Match DashboardFilterBar presets exactly so prefetch hits the same cache keys.
-  return ['today', 'yesterday', 'last_7', 'last_30'].map((preset) => {
+  return ['last_7', 'last_30', 'today', 'yesterday'].map((preset) => {
     const range = dateUtils.getDateRangeByPreset(preset);
     return {
       start: range.startDate,
