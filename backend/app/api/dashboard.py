@@ -15,6 +15,7 @@ from app.database import get_db
 from app.models import CDRRecord, Queue, Agent, DailyAggregate, HourlyAggregate, User, Extension
 from app.auth import get_current_user
 from app.clients.fusionpbx import FusionPBXClient
+from app.utils.agent_performance_utils import get_agent_interaction_key, is_handled, is_missed, normalize_agent_id
 from app.schemas import ExecutiveOverviewResponse, QueuePerformanceResponse, AgentPerformanceResponse, RepeatCallersResponse
 from app.kpi_definitions import KPIDefinitions
 from datetime import datetime, timedelta, timezone as dt_timezone
@@ -688,6 +689,123 @@ async def get_wallboard_live(
             "wait_time_seconds": wait_total,
         }
 
+    agent_records = (
+        db.query(CDRRecord)
+        .filter(
+            CDRRecord.start_epoch >= day_start_epoch,
+            CDRRecord.start_epoch <= now_epoch,
+            CDRRecord.direction == "inbound",
+            CDRRecord.cc_agent.isnot(None),
+        )
+        .options(
+            load_only(
+                CDRRecord.xml_cdr_uuid,
+                CDRRecord.bridge_uuid,
+                CDRRecord.cc_agent,
+                CDRRecord.cc_agent_uuid,
+                CDRRecord.cc_member_uuid,
+                CDRRecord.cc_side,
+                CDRRecord.leg,
+                CDRRecord.caller_id_number,
+                CDRRecord.cc_queue,
+                CDRRecord.cc_queue_joined_epoch,
+                CDRRecord.answer_epoch,
+                CDRRecord.end_epoch,
+                CDRRecord.start_epoch,
+                CDRRecord.status,
+                CDRRecord.billsec,
+                CDRRecord.hangup_cause,
+                CDRRecord.cc_cancel_reason,
+                CDRRecord.call_disposition,
+                CDRRecord.sip_hangup_disposition,
+                CDRRecord.missed_call,
+            )
+        )
+        .all()
+    )
+
+    interaction_map: Dict[str, Dict[str, List[CDRRecord]]] = {}
+    agent_activity: Dict[str, Dict[str, Any]] = {}
+    trying_states = {"ringing", "trying", "receiving", "offering"}
+    answered_states = {"answered", "active", "inbound", "in a queue call"}
+
+    for record in agent_records:
+        agent_id = normalize_agent_id(record)
+        if not agent_id:
+            continue
+
+        if agent_id not in interaction_map:
+            interaction_map[agent_id] = {}
+
+        interaction_key = get_agent_interaction_key(record) or str(getattr(record, "xml_cdr_uuid", ""))
+        if interaction_key not in interaction_map[agent_id]:
+            interaction_map[agent_id][interaction_key] = []
+        interaction_map[agent_id][interaction_key].append(record)
+
+        if agent_id not in agent_activity:
+            agent_activity[agent_id] = {
+                "last_event_epoch": None,
+                "has_active_call": False,
+                "has_trying_call": False,
+            }
+
+        status_text = (getattr(record, "status", "") or "").strip().lower()
+        start_epoch = _to_int(getattr(record, "start_epoch", None), 0)
+        answer_epoch = _to_int(getattr(record, "answer_epoch", None), 0)
+        end_epoch = _to_int(getattr(record, "end_epoch", None), 0)
+        latest_epoch = max(start_epoch, answer_epoch, end_epoch)
+        if latest_epoch > 0 and (
+            agent_activity[agent_id]["last_event_epoch"] is None
+            or latest_epoch > agent_activity[agent_id]["last_event_epoch"]
+        ):
+            agent_activity[agent_id]["last_event_epoch"] = latest_epoch
+
+        active_call = (
+            status_text in answered_states
+            and answer_epoch > 0
+            and (end_epoch <= 0 or end_epoch >= now_epoch - 30)
+        )
+        trying_call = (
+            status_text in trying_states
+            or (
+                answer_epoch <= 0
+                and (end_epoch <= 0)
+                and start_epoch > 0
+                and (now_epoch - start_epoch) <= 120
+            )
+        )
+
+        if active_call:
+            agent_activity[agent_id]["has_active_call"] = True
+        if trying_call:
+            agent_activity[agent_id]["has_trying_call"] = True
+
+    agent_stats: Dict[str, Dict[str, Any]] = {}
+    for agent_id, interactions in interaction_map.items():
+        answered_count = 0
+        for records in interactions.values():
+            if any(is_handled(record) for record in records):
+                answered_count += 1
+            elif any(is_missed(record) for record in records):
+                continue
+
+        activity = agent_activity.get(agent_id, {})
+        if activity.get("has_active_call"):
+            state = "Answered"
+        elif activity.get("has_trying_call"):
+            state = "Trying"
+        else:
+            state = "Waiting"
+
+        last_event_epoch = activity.get("last_event_epoch")
+        last_change_seconds = (now_epoch - int(last_event_epoch)) if last_event_epoch else None
+
+        agent_stats[agent_id] = {
+            "state": state,
+            "answered": answered_count,
+            "last_change_seconds": last_change_seconds,
+        }
+
     for queue in live_queues:
         queue_extension = str(_first_present_value(queue, ["queue_extension", "extension"], "") or "")
         queue_name = _first_present_value(
@@ -712,19 +830,29 @@ async def get_wallboard_live(
         )
 
     for agent in live_agents:
+        agent_id = _first_present_value(agent, ["agent_uuid", "call_center_agent_uuid", "agent_id"], "")
+        stats = agent_stats.get(str(agent_id), None)
+
+        state = "Waiting"
+        answered = 0
+        last_change_seconds = None
+
+        if stats is not None:
+            state = stats.get("state", "Waiting")
+            answered = _to_int(stats.get("answered"), 0)
+            last_change_seconds = stats.get("last_change_seconds")
+        else:
+            state = _normalize_agent_state(
+                _first_present_value(agent, ["status", "agent_status", "state", "agent_state"], "Waiting")
+            )
+
         agent_rows.append(
             {
-                "agent_id": _first_present_value(agent, ["agent_uuid", "call_center_agent_uuid", "agent_id"], ""),
+                "agent_id": agent_id,
                 "agent_name": _first_present_value(agent, ["agent_name", "name"], "Unknown Agent"),
-                "state": _normalize_agent_state(
-                    _first_present_value(agent, ["status", "agent_status", "state", "agent_state"], "Unknown")
-                ),
-                "answered": _to_int(
-                    _first_present_value(agent, ["answered", "calls_answered", "answer_count", "no_answer_count"], 0)
-                ),
-                "last_change_seconds": _to_seconds_since_epoch(
-                    _first_present_value(agent, ["status_epoch", "state_epoch", "last_status_change_epoch"], None)
-                ),
+                "state": state,
+                "answered": answered,
+                "last_change_seconds": last_change_seconds,
             }
         )
 
