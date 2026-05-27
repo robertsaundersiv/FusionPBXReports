@@ -48,6 +48,31 @@ function queueBorder(queue: WallboardLiveQueue): string {
   return 'border-slate-600/80';
 }
 
+function agentSortPriority(agent: WallboardLiveAgent): number {
+  const state = (agent.state || '').toLowerCase();
+  if (state.includes('answered') || state.includes('call') || state.includes('active')) {
+    return 0;
+  }
+  if (state.includes('ring') || state.includes('trying') || state.includes('receiving') || state.includes('offering')) {
+    return 1;
+  }
+  if (state.includes('wait') || state.includes('idle') || state.includes('ready')) {
+    return 2;
+  }
+  return 3;
+}
+
+function isAgentInCall(agent: WallboardLiveAgent): boolean {
+  const state = (agent.state || '').toLowerCase();
+  return (
+    state.includes('answered') ||
+    state.includes('in a queue call') ||
+    state.includes('on call') ||
+    state.includes('active') ||
+    state.includes('talk')
+  );
+}
+
 export default function Wallboard() {
   const configuredTimeZone = useFilterStore((state) => state.filters.timezone);
   const [data, setData] = useState<WallboardLiveResponse | null>(null);
@@ -110,6 +135,36 @@ export default function Wallboard() {
 
   const queues = data?.queues || [];
   const agents = data?.agents || [];
+  const sortedAgents = useMemo(
+    () =>
+      [...agents].sort((a, b) => {
+        // Keep agents currently in a call at the very top.
+        const inCallDelta = Number(isAgentInCall(b)) - Number(isAgentInCall(a));
+        if (inCallDelta !== 0) {
+          return inCallDelta;
+        }
+
+        const priorityDelta = agentSortPriority(a) - agentSortPriority(b);
+        if (priorityDelta !== 0) {
+          return priorityDelta;
+        }
+
+        const recencyA = a.last_change_seconds ?? Number.POSITIVE_INFINITY;
+        const recencyB = b.last_change_seconds ?? Number.POSITIVE_INFINITY;
+        const recencyDelta = recencyA - recencyB;
+        if (recencyDelta !== 0) {
+          return recencyDelta;
+        }
+
+        const answeredDelta = (b.answered || 0) - (a.answered || 0);
+        if (answeredDelta !== 0) {
+          return answeredDelta;
+        }
+
+        return a.agent_name.localeCompare(b.agent_name);
+      }),
+    [agents]
+  );
 
   const sortedQueues = useMemo(
     () => [...queues].sort((a, b) => b.trying - a.trying || b.answered - a.answered || a.queue_name.localeCompare(b.queue_name)),
@@ -258,7 +313,7 @@ export default function Wallboard() {
         <section className="rounded-2xl border border-slate-700 bg-slate-900/70 p-4 shadow-2xl shadow-black/40 sm:p-5">
           <h2 className="text-lg font-semibold text-white">Agent Status</h2>
           <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
-            {agents.map((agent) => (
+            {sortedAgents.map((agent) => (
               <div key={agent.agent_id || agent.agent_name} className={`rounded-lg border px-3 py-3 ${agentTone(agent)}`}>
                 <p className="text-xs uppercase tracking-[0.2em]">{agent.state}</p>
                 <p className="mt-1 truncate text-sm font-semibold text-white">{agent.agent_name}</p>
@@ -272,7 +327,7 @@ export default function Wallboard() {
             ))}
           </div>
 
-          {agents.length === 0 ? (
+          {sortedAgents.length === 0 ? (
             <p className="mt-3 text-sm text-slate-400">No live agent statuses returned yet.</p>
           ) : null}
         </section>
