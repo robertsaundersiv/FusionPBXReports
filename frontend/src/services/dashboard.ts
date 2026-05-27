@@ -151,11 +151,14 @@ export const dashboardService = {
   prefetchPostLoginViews(options: QueueReportPrefetchOptions = {}) {
     const timezone = options.timezone || getBrowserTimeZone();
     const ranges = buildQueueReportPrefetchRanges();
-    const executiveRange = ranges[2]; // "today"
+    const executiveRanges = ranges.slice(0, 2); // last_7, last_30
 
     void (async () => {
       // Requested order: Executive -> Queue Performance Report -> Agent Performance Report.
-      await prefetchExecutiveOverviewRange(executiveRange, timezone);
+      for (const range of executiveRanges) {
+        await prefetchExecutiveOverviewRange(range, timezone);
+        await sleep(150);
+      }
 
       for (const range of ranges) {
         await prefetchQueueReportRange(range, timezone);
