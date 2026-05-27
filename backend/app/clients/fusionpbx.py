@@ -34,6 +34,7 @@ class FusionPBXClient:
         self.verify_ssl = os.getenv("FUSIONPBX_VERIFY_SSL", "true").lower() == "true"
         self.wallboard_username = os.getenv("FUSIONPBX_WALLBOARD_USERNAME", "").strip()
         self.wallboard_password = os.getenv("FUSIONPBX_WALLBOARD_PASSWORD", "").strip()
+        self.wallboard_cookie = os.getenv("FUSIONPBX_WALLBOARD_COOKIE", "").strip()
         self.wallboard_resource_path = os.getenv(
             "FUSIONPBX_WALLBOARD_RESOURCE_PATH",
             "/app/call_center_wallboard/resources/call_center_wallboard.php?queue_name=",
@@ -77,6 +78,32 @@ class FusionPBXClient:
         normalized = self._normalize_wallboard_payload(direct_payload)
         if normalized:
             return normalized
+
+        # Cookie fallback: allow reuse of an authenticated Fusion web session.
+        cookie_header = self._build_wallboard_cookie_header()
+        if cookie_header:
+            headers = {
+                "Accept": "text/html,application/json,*/*",
+                "User-Agent": "FusionPBXReports/1.0",
+                "Cookie": cookie_header,
+            }
+            connector = None
+            if not self.verify_ssl:
+                import ssl
+                ssl_context = ssl.create_default_context()
+                ssl_context.check_hostname = False
+                ssl_context.verify_mode = ssl.CERT_NONE
+                connector = aiohttp.TCPConnector(ssl=ssl_context)
+
+            try:
+                async with aiohttp.ClientSession(headers=headers, connector=connector) as cookie_session:
+                    cookie_payload = await self._fetch_wallboard_payload_from_session(cookie_session, resource_url)
+                    normalized = self._normalize_wallboard_payload(cookie_payload)
+                    if normalized:
+                        return normalized
+                    logger.warning("Fusion wallboard cookie fallback failed: cookie did not return wallboard payload")
+            except Exception as exc:
+                logger.warning("Fusion wallboard cookie fallback failed: %s", exc)
 
         # If direct access fails, try a web-session login for true 1:1 wallboard access.
         if not (self.wallboard_username and self.wallboard_password):
@@ -154,6 +181,15 @@ class FusionPBXClient:
         if not path.startswith("/"):
             path = f"/{path}"
         return f"{self.host}{path}"
+
+    def _build_wallboard_cookie_header(self) -> Optional[str]:
+        raw_cookie = (self.wallboard_cookie or "").strip()
+        if not raw_cookie:
+            return None
+        # Accept either full cookie header value (k=v; k2=v2) or bare PHPSESSID token.
+        if "=" in raw_cookie:
+            return raw_cookie
+        return f"PHPSESSID={raw_cookie}"
 
     def _looks_like_login_page(self, html_text: str) -> bool:
         lowered = (html_text or "").lower()
