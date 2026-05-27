@@ -1,9 +1,14 @@
 """
 API routes for authentication
 """
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import logging
 import os
+import ssl
+import threading
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 import redis
@@ -30,6 +35,54 @@ LOGIN_LOCKOUT_THRESHOLD = int(os.getenv("AUTH_LOGIN_LOCKOUT_THRESHOLD", "5"))
 LOGIN_LOCKOUT_SECONDS = int(os.getenv("AUTH_LOGIN_LOCKOUT_SECONDS", "300"))
 
 _redis_client = None
+
+EXEC_WARMUP_BASE_URL = os.getenv("AUTH_EXEC_WARMUP_BASE_URL", "https://localhost")
+EXEC_WARMUP_TIMEZONE = os.getenv("AUTH_EXEC_WARMUP_TIMEZONE", "America/Phoenix")
+EXEC_WARMUP_TIMEOUT_SECONDS = int(os.getenv("AUTH_EXEC_WARMUP_TIMEOUT_SECONDS", "45"))
+
+
+def _build_exec_preset_range_utc(preset: str, timezone_name: str) -> tuple[str, str]:
+    tzinfo = ZoneInfo(timezone_name)
+    now_local = datetime.now(tzinfo)
+    current_day = now_local.date()
+
+    if preset == "last_7":
+        start_day = current_day - timedelta(days=6)
+    elif preset == "last_30":
+        start_day = current_day - timedelta(days=29)
+    else:
+        start_day = current_day
+
+    start_local = datetime(start_day.year, start_day.month, start_day.day, 0, 0, 0, 0, tzinfo=tzinfo)
+    end_local = datetime(current_day.year, current_day.month, current_day.day, 23, 59, 59, 999000, tzinfo=tzinfo)
+
+    start_utc = start_local.astimezone(timezone.utc)
+    end_utc = end_local.astimezone(timezone.utc)
+
+    return start_utc.isoformat().replace("+00:00", "Z"), end_utc.isoformat().replace("+00:00", "Z")
+
+
+def _warm_executive_overview_cache(access_token: str) -> None:
+    # Use an unverified local TLS context because production calls localhost behind nginx.
+    ssl_context = ssl._create_unverified_context()
+
+    for preset in ("last_7", "last_30"):
+        try:
+            start_date, end_date = _build_exec_preset_range_utc(preset, EXEC_WARMUP_TIMEZONE)
+            query = urlencode(
+                {
+                    "start_date": start_date,
+                    "end_date": end_date,
+                    "direction": "inbound",
+                    "timezone": EXEC_WARMUP_TIMEZONE,
+                }
+            )
+            url = f"{EXEC_WARMUP_BASE_URL}/api/v1/dashboard/executive-overview?{query}"
+            request = Request(url, headers={"Authorization": f"Bearer {access_token}"})
+            with urlopen(request, timeout=EXEC_WARMUP_TIMEOUT_SECONDS, context=ssl_context):
+                pass
+        except Exception as exc:
+            logger.warning("Executive warmup for %s skipped due to error: %s", preset, exc)
 
 
 def _get_redis_client():
@@ -216,6 +269,9 @@ def login(username: str, password: str, request: Request, db: Session = Depends(
     if user.last_login is None or (now_utc - user.last_login) >= timedelta(minutes=1):
         user.last_login = now_utc
         db.commit()
+
+    # Prime key executive ranges server-side so the first dashboard load is less likely to be cold.
+    threading.Thread(target=_warm_executive_overview_cache, args=(access_token,), daemon=True).start()
     
     return {
         "access_token": access_token,
