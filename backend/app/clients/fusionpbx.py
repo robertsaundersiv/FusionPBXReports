@@ -112,7 +112,7 @@ class FusionPBXClient:
             return None
 
         login_base = self.wallboard_host or self.host
-        login_url = f"{login_base}/"
+        login_url = f"{login_base}/login.php"
         headers = {
             "Accept": "text/html,application/json,*/*",
             "User-Agent": "FusionPBXReports/1.0",
