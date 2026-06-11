@@ -1216,6 +1216,9 @@ async def get_executive_overview(
     service_level_total = len(entry_asa_times)
     service_level_within = sum(1 for value in entry_asa_times if value <= threshold)
     service_level = (service_level_within / service_level_total * 100) if service_level_total > 0 else 0
+
+    # Shared local-date expression for daily trend queries.
+    local_start_timestamp = local_timestamp_expr(CDRRecord.start_epoch, timezone)
     
     # Get trend data (daily) - count unique queue entries by (caller, join_epoch)
     offered_trend = []
