@@ -10,7 +10,7 @@ import redis
 from fastapi import APIRouter, Depends, Query, HTTPException
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy.orm import Session, load_only
-from sqlalchemy import func, Integer, case, desc, or_, and_, cast, String
+from sqlalchemy import func, Integer, case, desc, or_, and_, cast, String, true
 from app.database import get_db
 from app.models import CDRRecord, Queue, Agent, DailyAggregate, HourlyAggregate, User, Extension
 from app.auth import get_current_user
@@ -130,10 +130,12 @@ def build_queue_report_cache_key(
     )
 
 
+
 def build_queue_scope_filter(queue_ids: Optional[List[str]], queue_extensions: Optional[List[str]]):
     """Build queue filter with UUID-first attribution and legacy extension fallback."""
     if queue_ids:
-        filters = [CDRRecord.call_center_queue_uuid.in_(queue_ids)]
+        # Add explicit type hinting here to prevent strict type inference
+        filters: List[Any] = [CDRRecord.call_center_queue_uuid.in_(queue_ids)]
         if queue_extensions:
             extension_filters = [CDRRecord.cc_queue.like(f"{ext}@%") for ext in queue_extensions]
             filters.append(
@@ -148,8 +150,8 @@ def build_queue_scope_filter(queue_ids: Optional[List[str]], queue_extensions: O
         extension_filters = [CDRRecord.cc_queue.like(f"{ext}@%") for ext in queue_extensions]
         return or_(*extension_filters)
 
-    return None
-
+    # Return a match-all expression when no constraints are passed
+    return true()
 
 def to_sunday_first_weekday_index(python_weekday: int) -> int:
     """Convert Python weekday numbering (Mon=0..Sun=6) to Sunday-first (Sun=0..Sat=6)."""
