@@ -33,7 +33,8 @@ EXEC_OVERVIEW_CACHE_TTL = int(os.getenv("EXEC_OVERVIEW_CACHE_TTL", "60"))
 METADATA_CACHE_TTL = int(os.getenv("METADATA_CACHE_TTL", "300"))
 QUEUE_REPORT_CACHE_TTL = int(os.getenv("QUEUE_REPORT_CACHE_TTL", "60"))
 QUEUE_TRANSFER_WINDOW_SECONDS = int(os.getenv("QUEUE_TRANSFER_WINDOW_SECONDS", "600"))
-QUEUE_TRANSFER_HOP_MAX_DAYS = int(os.getenv("QUEUE_TRANSFER_HOP_MAX_DAYS", "14"))
+# Keep hop attribution enabled for common monthly reporting windows.
+QUEUE_TRANSFER_HOP_MAX_DAYS = int(os.getenv("QUEUE_TRANSFER_HOP_MAX_DAYS", "62"))
 _redis_client = None
 
 QUEUE_ANALYTICS_COLUMNS = (
