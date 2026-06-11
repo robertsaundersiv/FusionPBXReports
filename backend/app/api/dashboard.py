@@ -319,6 +319,89 @@ def compute_queue_hop_transfer_keys(
     return transferred_keys
 
 
+def compute_queue_hop_answered_keys(
+    db: Session,
+    start_epoch: int,
+    end_epoch: int,
+    source_entries: Optional[List[tuple]] = None,
+    direction: Optional[str] = None,
+    transfer_window_seconds: int = QUEUE_TRANSFER_WINDOW_SECONDS,
+) -> Set[tuple]:
+    """Detect source queue entries that hop to another queue and are answered there."""
+    if source_entries is None:
+        source_entries = []
+
+    caller_numbers = {caller for _, caller, _ in source_entries if caller}
+
+    if not source_entries or not caller_numbers:
+        return set()
+
+    caller_timelines = {}
+    caller_list = list(caller_numbers)
+    CHUNK = 500
+    for i in range(0, len(caller_list), CHUNK):
+        caller_chunk = caller_list[i : i + CHUNK]
+        rows = (
+            db.query(
+                CDRRecord.caller_id_number,
+                CDRRecord.cc_queue_joined_epoch,
+                CDRRecord.cc_queue,
+                CDRRecord.cc_queue_answered_epoch,
+                CDRRecord.answer_epoch,
+                CDRRecord.hangup_cause,
+            )
+            .filter(
+                CDRRecord.start_epoch >= start_epoch,
+                CDRRecord.start_epoch <= end_epoch,
+                CDRRecord.cc_queue_joined_epoch.isnot(None),
+                CDRRecord.caller_id_number.in_(caller_chunk),
+            )
+        )
+        if direction:
+            rows = rows.filter(CDRRecord.direction == direction)
+
+        grouped_rows = {}
+        for caller, joined_epoch, cc_queue, queue_answered_epoch, answer_epoch, hangup_cause in rows.all():
+            if not caller or joined_epoch is None:
+                continue
+
+            cc_queue_val = cc_queue or ""
+            ext = cc_queue_val.split("@", 1)[0] if "@" in cc_queue_val else cc_queue_val
+            if not ext:
+                continue
+
+            entry_key = (caller, joined_epoch, ext)
+            if entry_key not in grouped_rows:
+                grouped_rows[entry_key] = False
+
+            if queue_answered_epoch is not None:
+                grouped_rows[entry_key] = True
+                continue
+
+            if answer_epoch is not None and (hangup_cause or "").upper() == "NORMAL_CLEARING":
+                grouped_rows[entry_key] = True
+
+        for (caller, joined_epoch, ext), answered in grouped_rows.items():
+            caller_timelines.setdefault(caller, []).append((joined_epoch, ext, answered))
+
+    for caller in caller_timelines:
+        caller_timelines[caller].sort(key=lambda x: x[0])
+
+    answered_keys = set()
+    for extension, caller, joined_epoch in source_entries:
+        timeline = caller_timelines.get(caller, [])
+        for later_joined, later_ext, later_answered in timeline:
+            if later_joined <= joined_epoch:
+                continue
+            if later_joined - joined_epoch > transfer_window_seconds:
+                break
+            if later_ext != extension and later_answered:
+                answered_keys.add((extension, caller, joined_epoch))
+                break
+
+    return answered_keys
+
+
 def is_voicemail_routed_record(record) -> bool:
     """Return True when a single CDR leg shows voicemail routing signals."""
     last_app = (getattr(record, "last_app", "") or "").lower()
@@ -1025,11 +1108,58 @@ async def get_executive_overview(
         if key not in unique_queue_entries:
             unique_queue_entries[key] = []
         unique_queue_entries[key].append(record)
+
+    hop_source_entries = []
+    for records in unique_queue_entries.values():
+        record = records[0]
+        caller = record.caller_id_number
+        joined_epoch = record.cc_queue_joined_epoch
+        if not caller or joined_epoch is None:
+            continue
+        if is_queue_entry_answered(records) or is_queue_entry_voicemail(records):
+            continue
+
+        cc_queue = record.cc_queue or ""
+        extension = cc_queue.split("@", 1)[0] if "@" in cc_queue else cc_queue
+        if not extension:
+            continue
+
+        hop_source_entries.append((extension, caller, joined_epoch))
+
+    range_days = max(1.0, (end_epoch - start_epoch) / 86400.0)
+    hop_answered_keys = set()
+    if range_days <= float(QUEUE_TRANSFER_HOP_MAX_DAYS):
+        hop_answered_keys = compute_queue_hop_answered_keys(
+            db,
+            start_epoch=start_epoch,
+            end_epoch=end_epoch,
+            source_entries=hop_source_entries,
+            direction=direction or "inbound",
+        )
     
     # Count outcomes
     total_offered_queue = len(unique_queue_entries)
-    total_answered = sum(1 for records in unique_queue_entries.values() 
-                        if is_queue_entry_answered(records))
+    total_answered = 0
+    answered_by_day = {}
+    offered_by_day = {}
+    for records in unique_queue_entries.values():
+        record = records[0]
+        entry_key = (record.caller_id_number, record.cc_queue_joined_epoch)
+        cc_queue = record.cc_queue or ""
+        extension = cc_queue.split("@", 1)[0] if "@" in cc_queue else cc_queue
+        entry_is_answered = is_queue_entry_answered(records) or (
+            extension and (extension, record.caller_id_number, record.cc_queue_joined_epoch) in hop_answered_keys
+        )
+
+        queue_epoch = record.cc_queue_joined_epoch or record.start_epoch
+        if queue_epoch is not None:
+            date_key = datetime.fromtimestamp(queue_epoch, user_timezone).date().isoformat()
+            offered_by_day[date_key] = offered_by_day.get(date_key, 0) + 1
+            if entry_is_answered:
+                answered_by_day[date_key] = answered_by_day.get(date_key, 0) + 1
+
+        if entry_is_answered:
+            total_answered += 1
     total_voicemail = sum(1 for records in unique_queue_entries.values()
                           if is_queue_entry_voicemail(records))
     total_abandoned = sum(1 for records in unique_queue_entries.values()
@@ -1088,38 +1218,11 @@ async def get_executive_overview(
     service_level = (service_level_within / service_level_total * 100) if service_level_total > 0 else 0
     
     # Get trend data (daily) - count unique queue entries by (caller, join_epoch)
-    local_start_timestamp = local_timestamp_expr(CDRRecord.start_epoch, timezone)
-    trend_query = db.query(
-        func.date(local_start_timestamp).label('date'),
-        # Count distinct (caller + join_epoch) combinations
-        func.count(func.distinct(
-            func.concat(CDRRecord.caller_id_number, '|', cast(CDRRecord.cc_queue_joined_epoch, String))
-        )).label('offered'),
-        # Count answered queue entries  
-        func.count(func.distinct(
-            case(
-                (CDRRecord.cc_queue_answered_epoch.isnot(None), 
-                 func.concat(CDRRecord.caller_id_number, '|', cast(CDRRecord.cc_queue_joined_epoch, String))),
-                else_=None
-            )
-        )).label('answered'),
-    ).filter(
-        CDRRecord.start_epoch >= start_epoch,
-        CDRRecord.start_epoch <= end_epoch,
-        CDRRecord.cc_queue_joined_epoch.isnot(None)
-    )
-    
-    # Apply same filters as main query
-    if queue_extensions:
-        extension_filters = [CDRRecord.cc_queue.like(f"{ext}@%") for ext in queue_extensions]
-        trend_query = trend_query.filter(or_(*extension_filters))
-    if direction:
-        trend_query = trend_query.filter(CDRRecord.direction == direction)
-    
-    daily_aggregates = trend_query.group_by('date').order_by('date').all()
-    
-    offered_trend = [{'date': str(d[0]), 'value': d[1]} for d in daily_aggregates]
-    answered_trend = [{'date': str(d[0]), 'value': d[2] or 0} for d in daily_aggregates]
+    offered_trend = []
+    answered_trend = []
+    for date_key in sorted(offered_by_day.keys()):
+        offered_trend.append({'date': date_key, 'value': offered_by_day.get(date_key, 0)})
+        answered_trend.append({'date': date_key, 'value': answered_by_day.get(date_key, 0)})
 
     # Bucket call volume by weekday and half-hour using the same unique queue-entry methodology
     weekday_totals = {index: 0 for index in range(7)}

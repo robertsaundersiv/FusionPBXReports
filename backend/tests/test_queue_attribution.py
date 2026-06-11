@@ -3,8 +3,11 @@ Unit tests for first-queue attribution logic in queue performance report
 """
 import pytest
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from app.models import CDRRecord
 from sqlalchemy.orm import Session
+
+from app.api.dashboard import compute_queue_hop_answered_keys
 
 
 class MockCDRRecord:
@@ -241,6 +244,44 @@ class TestFirstQueueAttribution:
         assert within_threshold == 2
         assert answered_count == 3
         assert abs(sl30 - 66.67) < 0.01
+
+    def test_queue_hop_counts_source_queue_as_answered(self):
+        """
+        Test: NET queue call transferred into ALL queue and answered there should count as answered for NET.
+        Expected: source NET entry is flagged as answered within the hop window.
+        """
+        now = int(datetime.utcnow().timestamp())
+
+        source_entry = ("NET-Sales-Queue", "caller-1", now)
+        hop_join = now + 30
+
+        class FakeQuery:
+            def __init__(self, rows):
+                self.rows = rows
+
+            def filter(self, *args, **kwargs):
+                return self
+
+            def all(self):
+                return self.rows
+
+        class FakeDB:
+            def query(self, *args, **kwargs):
+                return FakeQuery([
+                    ("caller-1", now, "NET-Sales-Queue@internal", None, None, "NORMAL_CLEARING"),
+                    ("caller-1", hop_join, "ALL-Sales-Queue@internal", hop_join + 5, None, "NORMAL_CLEARING"),
+                ])
+
+        answered_keys = compute_queue_hop_answered_keys(
+            FakeDB(),
+            start_epoch=now - 10,
+            end_epoch=now + 120,
+            source_entries=[source_entry],
+            direction="inbound",
+            transfer_window_seconds=60,
+        )
+
+        assert source_entry in answered_keys
     
     def test_asa_calculation_weighted(self):
         """
