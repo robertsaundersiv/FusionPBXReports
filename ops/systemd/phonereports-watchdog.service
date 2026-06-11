@@ -1,0 +1,9 @@
+[Unit]
+Description=FusionPBXReports self-healing watchdog
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/phonereports
+ExecStart=/opt/phonereports/scripts/self-heal-watchdog.sh

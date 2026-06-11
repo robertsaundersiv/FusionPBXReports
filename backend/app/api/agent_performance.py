@@ -9,7 +9,7 @@ from collections import defaultdict
 import re
 
 from fastapi import APIRouter, Depends, Query, HTTPException
-from sqlalchemy import or_, desc
+from sqlalchemy import or_, and_, desc
 from sqlalchemy.orm import Session, load_only
 
 from app.auth import get_current_user, ROLE_SUPER_ADMIN
@@ -349,6 +349,7 @@ def apply_common_filters(
     include_outbound: bool,
     accessible_agent_ids: Optional[Set[str]] = None,
     all_known_caller_numbers: Optional[List[str]] = None,
+    queue_ids: Optional[List[str]] = None,
 ):
     query = query.filter(
         CDRRecord.start_epoch >= start_epoch,
@@ -358,9 +359,23 @@ def apply_common_filters(
     if not include_outbound:
         query = query.filter(CDRRecord.direction == "inbound")
 
-    if queue_extensions:
-        extension_filters = [CDRRecord.cc_queue.like(f"{ext}@%") for ext in queue_extensions]
-        queue_filter = or_(*extension_filters)
+    if queue_ids or queue_extensions:
+        queue_filters = []
+        if queue_ids:
+            queue_filters.append(CDRRecord.call_center_queue_uuid.in_(queue_ids))
+        if queue_extensions:
+            extension_filters = [CDRRecord.cc_queue.like(f"{ext}@%") for ext in queue_extensions]
+            if queue_ids:
+                queue_filters.append(
+                    and_(
+                        CDRRecord.call_center_queue_uuid.is_(None),
+                        or_(*extension_filters),
+                    )
+                )
+            else:
+                queue_filters.append(or_(*extension_filters))
+
+        queue_filter = or_(*queue_filters)
         if include_outbound:
             # Outbound calls generally don't have cc_queue; keep them when
             # include_outbound is enabled even if queue filters are selected.
@@ -487,6 +502,7 @@ async def get_agent_leaderboard(
         include_outbound,
         accessible_agent_ids,
         all_known_caller_numbers,
+        queue_ids,
     )
     query = optimize_cdr_query(query)
 
@@ -561,6 +577,7 @@ async def get_agent_leaderboard(
             False,
             accessible_agent_ids,
             None,
+            queue_ids,
         )
         baseline_query = optimize_cdr_query(baseline_query)
         baseline_records = baseline_query.all()
@@ -692,6 +709,7 @@ async def get_agent_trends(
         include_outbound,
         accessible_agent_ids,
         all_known_caller_numbers,
+        queue_ids,
     )
     query = optimize_cdr_query(query)
 
@@ -801,6 +819,7 @@ async def get_agent_performance_report(
         include_outbound,
         accessible_agent_ids,
         all_known_caller_numbers,
+        queue_ids,
     )
     if not include_outbound:
         query = query.filter(CDRRecord.cc_queue.isnot(None))
@@ -871,6 +890,7 @@ async def get_agent_performance_report(
             False,
             accessible_agent_ids,
             None,
+            queue_ids,
         ).filter(CDRRecord.cc_queue.isnot(None))
         baseline_query = optimize_cdr_query(baseline_query)
         baseline_records = baseline_query.all()
@@ -1025,6 +1045,7 @@ async def get_agent_outliers(
         include_outbound,
         accessible_agent_ids,
         all_known_caller_numbers,
+        queue_ids,
     )
     query = optimize_cdr_query(query)
 
@@ -1116,6 +1137,7 @@ async def get_agent_calls(
         include_outbound,
         accessible_agent_ids,
         all_known_caller_numbers,
+        queue_ids,
     )
     query = optimize_cdr_query(query)
 

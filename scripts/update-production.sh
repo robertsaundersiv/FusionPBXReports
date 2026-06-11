@@ -33,7 +33,13 @@ git pull --ff-only origin "$BRANCH"
 export GIT_COMMIT="$(git rev-parse --short HEAD)"
 export BUILD_TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
+APP_SERVICES=(backend worker celery-beat frontend)
+RUNTIME_SERVICES=(backend worker celery-beat frontend nginx)
+
 echo "Building release for commit $GIT_COMMIT at $BUILD_TIMESTAMP"
-"${COMPOSE_CMD[@]}" up -d --build --remove-orphans backend worker celery-beat frontend nginx
+"${COMPOSE_CMD[@]}" build "${APP_SERVICES[@]}"
+
+echo "Replacing running services"
+"${COMPOSE_CMD[@]}" up -d --force-recreate --remove-orphans "${RUNTIME_SERVICES[@]}"
 
 echo "Deployment complete. Quality & Health should now show commit $GIT_COMMIT."

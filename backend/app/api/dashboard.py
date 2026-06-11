@@ -10,7 +10,7 @@ import redis
 from fastapi import APIRouter, Depends, Query, HTTPException
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy.orm import Session, load_only
-from sqlalchemy import func, Integer, case, desc, or_, cast, String
+from sqlalchemy import func, Integer, case, desc, or_, and_, cast, String
 from app.database import get_db
 from app.models import CDRRecord, Queue, Agent, DailyAggregate, HourlyAggregate, User, Extension
 from app.auth import get_current_user
@@ -128,6 +128,27 @@ def build_queue_report_cache_key(
         f"dashboard:queue-report:v1:{start_epoch // 60}:{end_epoch // 60}:"
         f"{queue_part}:{int(strict_answered)}:{int(exclude_deflects)}:{timezone_part}"
     )
+
+
+def build_queue_scope_filter(queue_ids: Optional[List[str]], queue_extensions: Optional[List[str]]):
+    """Build queue filter with UUID-first attribution and legacy extension fallback."""
+    if queue_ids:
+        filters = [CDRRecord.call_center_queue_uuid.in_(queue_ids)]
+        if queue_extensions:
+            extension_filters = [CDRRecord.cc_queue.like(f"{ext}@%") for ext in queue_extensions]
+            filters.append(
+                and_(
+                    CDRRecord.call_center_queue_uuid.is_(None),
+                    or_(*extension_filters),
+                )
+            )
+        return or_(*filters)
+
+    if queue_extensions:
+        extension_filters = [CDRRecord.cc_queue.like(f"{ext}@%") for ext in queue_extensions]
+        return or_(*extension_filters)
+
+    return None
 
 
 def to_sunday_first_weekday_index(python_weekday: int) -> int:
@@ -1065,6 +1086,7 @@ async def get_executive_overview(
     if queue_ids:
         queues = db.query(Queue).filter(Queue.queue_id.in_(queue_ids)).all()
         queue_extensions = [q.queue_extension for q in queues if q.queue_extension]
+    queue_scope_filter = build_queue_scope_filter(queue_ids, queue_extensions)
     
     # Query base CDR data
     base_query = db.query(CDRRecord).filter(
@@ -1072,10 +1094,8 @@ async def get_executive_overview(
         CDRRecord.start_epoch <= end_epoch,
     )
     
-    if queue_extensions:
-        # Filter by matching the extension part of cc_queue (before @)
-        extension_filters = [CDRRecord.cc_queue.like(f"{ext}@%") for ext in queue_extensions]
-        base_query = base_query.filter(or_(*extension_filters))
+    if queue_scope_filter is not None:
+        base_query = base_query.filter(queue_scope_filter)
     
     if direction:
         base_query = base_query.filter(CDRRecord.direction == direction)
@@ -1093,9 +1113,8 @@ async def get_executive_overview(
         CDRRecord.start_epoch <= end_epoch,
         CDRRecord.cc_queue_joined_epoch.isnot(None)
     )
-    if queue_extensions:
-        extension_filters = [CDRRecord.cc_queue.like(f"{ext}@%") for ext in queue_extensions]
-        queue_records_query = queue_records_query.filter(or_(*extension_filters))
+    if queue_scope_filter is not None:
+        queue_records_query = queue_records_query.filter(queue_scope_filter)
     if direction:
         queue_records_query = queue_records_query.filter(CDRRecord.direction == direction)
 
@@ -1306,9 +1325,8 @@ async def get_executive_overview(
         CDRRecord.cc_queue_answered_epoch.isnot(None)
     )
     
-    if queue_extensions:
-        extension_filters = [CDRRecord.cc_queue.like(f"{ext}@%") for ext in queue_extensions]
-        service_level_trend_query = service_level_trend_query.filter(or_(*extension_filters))
+    if queue_scope_filter is not None:
+        service_level_trend_query = service_level_trend_query.filter(queue_scope_filter)
     if direction:
         service_level_trend_query = service_level_trend_query.filter(CDRRecord.direction == direction)
     
@@ -1335,9 +1353,8 @@ async def get_executive_overview(
         CDRRecord.cc_queue_answered_epoch.isnot(None)
     )
     
-    if queue_extensions:
-        extension_filters = [CDRRecord.cc_queue.like(f"{ext}@%") for ext in queue_extensions]
-        asa_trend_query = asa_trend_query.filter(or_(*extension_filters))
+    if queue_scope_filter is not None:
+        asa_trend_query = asa_trend_query.filter(queue_scope_filter)
     if direction:
         asa_trend_query = asa_trend_query.filter(CDRRecord.direction == direction)
     
@@ -1356,9 +1373,8 @@ async def get_executive_overview(
         CDRRecord.cc_queue_answered_epoch.isnot(None)
     )
     
-    if queue_extensions:
-        extension_filters = [CDRRecord.cc_queue.like(f"{ext}@%") for ext in queue_extensions]
-        aht_trend_query = aht_trend_query.filter(or_(*extension_filters))
+    if queue_scope_filter is not None:
+        aht_trend_query = aht_trend_query.filter(queue_scope_filter)
     if direction:
         aht_trend_query = aht_trend_query.filter(CDRRecord.direction == direction)
     
@@ -1378,9 +1394,8 @@ async def get_executive_overview(
         CDRRecord.cc_queue_joined_epoch.isnot(None)
     )
     
-    if queue_extensions:
-        extension_filters = [CDRRecord.cc_queue.like(f"{ext}@%") for ext in queue_extensions]
-        busiest_queues_query = busiest_queues_query.filter(or_(*extension_filters))
+    if queue_scope_filter is not None:
+        busiest_queues_query = busiest_queues_query.filter(queue_scope_filter)
     if direction:
         busiest_queues_query = busiest_queues_query.filter(CDRRecord.direction == direction)
     
@@ -1422,9 +1437,8 @@ async def get_executive_overview(
         CDRRecord.cc_queue_joined_epoch.isnot(None)
     )
     
-    if queue_extensions:
-        extension_filters = [CDRRecord.cc_queue.like(f"{ext}@%") for ext in queue_extensions]
-        worst_abandon_results = worst_abandon_results.filter(or_(*extension_filters))
+    if queue_scope_filter is not None:
+        worst_abandon_results = worst_abandon_results.filter(queue_scope_filter)
     if direction:
         worst_abandon_results = worst_abandon_results.filter(CDRRecord.direction == direction)
     
@@ -1691,12 +1705,27 @@ async def get_queue_performance(
     
     for queue in queues:
         queue_extension = queue.queue_extension
+        queue_uuid = str(queue.queue_id) if getattr(queue, "queue_id", None) is not None else None
+
+        queue_match_filter = None
+        if queue_uuid:
+            # Prefer canonical queue UUID attribution; fall back to extension
+            # only when legacy rows are missing call_center_queue_uuid.
+            queue_match_filter = or_(
+                CDRRecord.call_center_queue_uuid == queue_uuid,
+                and_(
+                    CDRRecord.call_center_queue_uuid.is_(None),
+                    CDRRecord.cc_queue.like(f"{queue_extension}@%"),
+                ),
+            )
+        else:
+            queue_match_filter = CDRRecord.cc_queue.like(f"{queue_extension}@%")
         
         # Base query for this queue
         base_query = db.query(CDRRecord).filter(
             CDRRecord.start_epoch >= start_epoch,
             CDRRecord.start_epoch <= end_epoch,
-            CDRRecord.cc_queue.like(f"{queue_extension}@%"),
+            queue_match_filter,
         )
         
         if direction:
@@ -1707,7 +1736,7 @@ async def get_queue_performance(
             CDRRecord.start_epoch >= start_epoch,
             CDRRecord.start_epoch <= end_epoch,
             CDRRecord.cc_queue_joined_epoch.isnot(None),
-            CDRRecord.cc_queue.like(f"{queue_extension}@%"),
+            queue_match_filter,
         )
         
         if direction:
@@ -2110,6 +2139,7 @@ async def get_queue_performance_report(
     if queue_ids:
         queues = db.query(Queue).filter(Queue.queue_id.in_(queue_ids)).all()
         queue_extensions = [q.queue_extension for q in queues if q.queue_extension]
+    queue_scope_filter = build_queue_scope_filter(queue_ids, queue_extensions)
     else:
         queues = db.query(Queue).all()
 
@@ -2128,7 +2158,20 @@ async def get_queue_performance_report(
         CDRRecord.cc_queue_joined_epoch.isnot(None),
     )
 
-    if queue_extensions:
+    if queue_ids:
+        # Prefer canonical queue UUID attribution; include extension fallback
+        # only for legacy rows that lack call_center_queue_uuid.
+        queue_uuid_filters = [CDRRecord.call_center_queue_uuid.in_(queue_ids)]
+        if queue_extensions:
+            extension_filters = [CDRRecord.cc_queue.like(f"{ext}@%") for ext in queue_extensions]
+            queue_uuid_filters.append(
+                and_(
+                    CDRRecord.call_center_queue_uuid.is_(None),
+                    or_(*extension_filters),
+                )
+            )
+        base_query = base_query.filter(or_(*queue_uuid_filters))
+    elif queue_extensions:
         extension_filters = [CDRRecord.cc_queue.like(f"{ext}@%") for ext in queue_extensions]
         base_query = base_query.filter(or_(*extension_filters))
 
@@ -2343,9 +2386,8 @@ async def get_repeat_callers(
         CDRRecord.cc_queue_joined_epoch.isnot(None),
     )
 
-    if queue_extensions:
-        extension_filters = [CDRRecord.cc_queue.like(f"{ext}@%") for ext in queue_extensions]
-        query = query.filter(or_(*extension_filters))
+    if queue_scope_filter is not None:
+        query = query.filter(queue_scope_filter)
 
     if effective_direction:
         query = query.filter(CDRRecord.direction == effective_direction)
@@ -2470,15 +2512,11 @@ async def get_outbound_calls(
     
     # Convert queue UUIDs to cc_queue identifiers if provided
     if queue_ids:
-        queue_extensions = []
-        for queue_id in queue_ids:
-            queue = db.query(Queue).filter(Queue.queue_id == queue_id).first()
-            if queue and queue.queue_extension:
-                queue_extensions.append(queue.queue_extension)
-        
-        if queue_extensions:
-            extension_filters = [CDRRecord.cc_queue.like(f"{ext}@%") for ext in queue_extensions]
-            base_query = base_query.filter(or_(*extension_filters))
+        queues = db.query(Queue).filter(Queue.queue_id.in_(queue_ids)).all()
+        queue_extensions = [q.queue_extension for q in queues if q.queue_extension]
+        queue_scope_filter = build_queue_scope_filter(queue_ids, queue_extensions)
+        if queue_scope_filter is not None:
+            base_query = base_query.filter(queue_scope_filter)
     
     # Build extension mappings used for user attribution.
     extensions = db.query(Extension).all()

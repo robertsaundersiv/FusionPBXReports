@@ -1,0 +1,11 @@
+[Unit]
+Description=Run FusionPBXReports watchdog every 30 seconds
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=30s
+AccuracySec=1s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

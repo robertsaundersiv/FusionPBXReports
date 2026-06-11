@@ -47,6 +47,30 @@ chmod +x scripts/update-production.sh
 ./scripts/update-production.sh
 ```
 
+## Production Self-Heal Watchdog
+
+Install and enable a local watchdog that checks nginx, backend, and database every 30 seconds.
+If a failure persists for more than 300 seconds, it rebuilds app images, recreates app containers,
+and restarts nginx.
+
+```bash
+sudo bash ./scripts/install-watchdog.sh
+```
+
+Verify timer and recent watchdog activity:
+
+```bash
+sudo systemctl status phonereports-watchdog.timer --no-pager
+sudo systemctl list-timers --all | grep phonereports-watchdog
+sudo journalctl -u phonereports-watchdog.service -n 100 --no-pager
+```
+
+Temporarily disable:
+
+```bash
+sudo systemctl disable --now phonereports-watchdog.timer
+```
+
 ## Key Operational Notes
 
 - Backend container startup runs migrations and seed/sync scripts.
