@@ -2141,9 +2141,9 @@ async def get_queue_performance_report(
     if queue_ids:
         queues = db.query(Queue).filter(Queue.queue_id.in_(queue_ids)).all()
         queue_extensions = [q.queue_extension for q in queues if q.queue_extension]
-    queue_scope_filter = build_queue_scope_filter(queue_ids, queue_extensions)
     else:
         queues = db.query(Queue).all()
+    queue_scope_filter = build_queue_scope_filter(queue_ids, queue_extensions)
 
     queue_by_extension = {
         q.queue_extension: q
@@ -2160,22 +2160,8 @@ async def get_queue_performance_report(
         CDRRecord.cc_queue_joined_epoch.isnot(None),
     )
 
-    if queue_ids:
-        # Prefer canonical queue UUID attribution; include extension fallback
-        # only for legacy rows that lack call_center_queue_uuid.
-        queue_uuid_filters = [CDRRecord.call_center_queue_uuid.in_(queue_ids)]
-        if queue_extensions:
-            extension_filters = [CDRRecord.cc_queue.like(f"{ext}@%") for ext in queue_extensions]
-            queue_uuid_filters.append(
-                and_(
-                    CDRRecord.call_center_queue_uuid.is_(None),
-                    or_(*extension_filters),
-                )
-            )
-        base_query = base_query.filter(or_(*queue_uuid_filters))
-    elif queue_extensions:
-        extension_filters = [CDRRecord.cc_queue.like(f"{ext}@%") for ext in queue_extensions]
-        base_query = base_query.filter(or_(*extension_filters))
+    if queue_scope_filter is not None:
+        base_query = base_query.filter(queue_scope_filter)
 
     if direction:
         base_query = base_query.filter(CDRRecord.direction == direction)
